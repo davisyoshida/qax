@@ -30,7 +30,7 @@ class ImplicitConst(ImplicitArray):
         """
         Should return:
             - an iterable of (name, child) tuples
-            - Any auxiliary data (shape and dtype are handled by the base class we 
+            - Any auxiliary data (shape and dtype are handled by the base class so we don't need to manage them)
         """
         return [('value', self.value)], ()
 
