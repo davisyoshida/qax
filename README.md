@@ -16,18 +16,16 @@ from qax import ImplicitArray, implicit_op, use_implicit_args
 # To define the behavior we want, we subclass qax.ImplicitArray
 class ImplicitConst(ImplicitArray):
     def __init__(self, value, shape):
-        # The ImplicitArray constructor needs a shape and dtype
-        # so that we can pretend to be a tensor of that description
-
-        # This is in case we get a python scalar as an argument
+        # Get the dtype in a way which will work for JAX types or python scalars
         dtype = jax.core.get_aval(value).dtype
 
+        # The ImplicitArray constructor needs a shape and dtype
+        # so that we can pretend to be a tensor of that description
         super().__init__(shape=shape, dtype=dtype)
         self.value = value
 
     # ImplicitArray subclasses automatically get registered as pytrees
     # so they need to define flattening and unflattening behavior
-
     def flatten(self):
         """
         Should return:
@@ -105,7 +103,6 @@ class ImplicitConst(ImplicitArray):
     # into an actual JAX array
     def materialize(self):
         return jnp.full(self.shape, self.value, dtype=self.dtype)
-
 
     def __str__(self):
         return f'ImplicitConst({self.value}, {self.shape})'
