@@ -151,3 +151,11 @@ print(nested_result) # ImplicitConst(ImplicitConst(-9.779541969299316, ()), (5, 
 ```
 
 The API might change at any time since there's a high chance there are issues I'm not aware of or preferable ways to implement things. That being said, it would be super helpful if people could try it and give feedback, or tell me about possible use case they find.
+
+## Installation
+
+```bash
+git clone https://github.com/davisyoshida/qax.git
+cd qax
+pip install -e .
+```
