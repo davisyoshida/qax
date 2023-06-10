@@ -70,7 +70,7 @@ class ImplicitArray(ABC):
 
     def _materialize(self):
         wrapped = lu.wrap_init(type(self).materialize)
-        flat, in_tree = _flatten_one_implicit_layer((self,))
+        flat, in_tree = utils.flatten_one_implicit_layer((self,))
         flat_fn, out_tree = flatten_fun_nokwargs(wrapped, in_tree)
         out_flat = use_implicit_args(flat_fn.call_wrapped)(*flat)
         result = jax.tree_util.tree_unflatten(out_tree(), out_flat)
@@ -119,7 +119,7 @@ class ImplicitArray(ABC):
         if len(args) == 2 and self.commute_ops:
             args, use_params = _maybe_swap_args(primitive.name, args, use_params)
 
-        flat_args, in_tree = _flatten_one_implicit_layer((args, maybe_kwargs))
+        flat_args, in_tree = utils.flatten_one_implicit_layer((args, maybe_kwargs))
         flat_handler, out_tree = flatten_fun(handler, in_tree)
 
         result = use_implicit_args(flat_handler.call_wrapped)(*flat_args)
@@ -205,22 +205,6 @@ class ImplicitArrayTracer(core.Tracer):
 
         return core.full_lower(self.value)
 
-def wrap_jaxpr(jaxpr, vals_with_implicits, return_closed=True):
-    if isinstance(jaxpr, jax.core.ClosedJaxpr):
-        literals = jaxpr.literals
-        jaxpr = jaxpr.jaxpr
-    else:
-        literals = []
-
-    wrapped_fn = lu.wrap_init(use_implicit_args(partial(core.eval_jaxpr, jaxpr)))
-    flat_args, in_tree = jax.tree_util.tree_flatten((literals, *vals_with_implicits))
-    flat_fn, out_tree = flatten_fun_nokwargs(wrapped_fn, in_tree)
-
-    new_jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(flat_fn, [core.get_aval(v) for v in flat_args])
-
-    ret = (jax.core.ClosedJaxpr(new_jaxpr, consts),) if return_closed else (new_jaxpr, consts)
-    return *ret, flat_args, out_tree()
-
 class ImplicitArrayTrace(core.Trace):
     pure = lift = lambda self, val: ImplicitArrayTracer(self, val)
 
@@ -248,22 +232,68 @@ class ImplicitArrayTrace(core.Trace):
             return [ImplicitArrayTracer(self, out) for out in outs]
         return ImplicitArrayTracer(self, outs)
 
+def wrap_jaxpr(jaxpr, vals_with_implicits, return_closed=True):
+    if isinstance(jaxpr, jax.core.ClosedJaxpr):
+        literals = jaxpr.literals
+        jaxpr = jaxpr.jaxpr
+    else:
+        literals = []
+
+    wrapped_fn = lu.wrap_init(use_implicit_args(partial(core.eval_jaxpr, jaxpr)))
+    flat_args, in_tree = jax.tree_util.tree_flatten((literals, *vals_with_implicits))
+    flat_fn, out_tree = flatten_fun_nokwargs(wrapped_fn, in_tree)
+
+    new_jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(flat_fn, [core.get_aval(v) for v in flat_args])
+
+    ret = (jax.core.ClosedJaxpr(new_jaxpr, consts),) if return_closed else (new_jaxpr, consts)
+    return *ret, flat_args, out_tree()
+
+def _transform_jaxpr_output(jaxpr, jaxpr_args, orig_out_struct, out_transform):
+    def eval_fn(literals, *args):
+        output = use_implicit_args(partial(core.eval_jaxpr, jaxpr.jaxpr))(literals, *args)
+        unflattened_output = orig_out_struct.unflatten(output)
+        return out_transform(unflattened_output)
+
+    wrapped = lu.wrap_init(eval_fn)
+
+    flat_args, in_tree = jax.tree_util.tree_flatten((jaxpr.literals, *jaxpr_args))
+    flat_fn, out_tree = flatten_fun_nokwargs(wrapped, in_tree)
+    new_jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(flat_fn, [core.get_aval(v) for v in flat_args])
+
+    return jax.core.ClosedJaxpr(new_jaxpr, consts), out_tree()
+
+def _match_branches(branches, arg_vals):
+    out_avals = []
+    new_jaxprs = []
+    flat_inputs = None
+    branch_out_struct = None
+    for branch in branches:
+        new_jaxpr, flat_inputs, branch_out_struct = wrap_jaxpr(branch, arg_vals)
+        new_jaxprs.append((new_jaxpr, branch_out_struct))
+        out_avals.append(
+            branch_out_struct.unflatten(
+                jax.eval_shape(
+                    partial(core.eval_jaxpr, new_jaxpr.jaxpr), new_jaxpr.literals, *flat_inputs
+                )
+            )
+        )
+
+    out_transforms = utils.get_common_prefix_transforms(out_avals)
+    new_branches = []
+    out_struct = None
+    for (new_jaxpr, orig_out_struct), transform in zip(new_jaxprs, out_transforms):
+        new_jaxpr, out_struct = _transform_jaxpr_output(new_jaxpr, flat_inputs, orig_out_struct, transform)
+        new_branches.append(new_jaxpr)
+
+    return tuple(new_branches), out_struct, flat_inputs
+
 def _handle_cond(primitive, *vals, params):
     cond_val, *arg_vals = vals
     subfuns, bind_params = primitive.get_bind_params(params)
 
-    new_branches = []
-    out_struct = None
-    flat_inputs = []
-    for branch in params['branches']:
-        new_jaxpr, flat_inputs, branch_out_struct = wrap_jaxpr(branch, arg_vals)
-        new_branches.append(new_jaxpr)
-        if out_struct is not None and (branch_out_struct != out_struct):
-            warnings.warn(f'Branches of cond have different output shapes, so implicit args will be materialized.')
-            return NotImplemented
-        out_struct = branch_out_struct
 
-    bind_params['branches'] = tuple(new_branches)
+    new_branches, out_struct, flat_inputs = _match_branches(params['branches'], arg_vals)
+    bind_params['branches'] = new_branches
     bind_params['linear'] = _broadcast_tuple(params['linear'], arg_vals)
 
     outs = primitive.bind(*subfuns, cond_val, *flat_inputs, **bind_params)
@@ -312,21 +342,3 @@ def _broadcast_tuple(t, trees):
         (tuple_val for _ in jax.tree_util.tree_leaves(tree))
         for tuple_val, tree in zip(t, trees)
     ))
-
-def _flatten_one_implicit_layer(tree):
-    def is_leaf_below_node(node, x):
-        return isinstance(x, ImplicitArray) and x is not node
-
-    def replace_subtree_implicits(node):
-        return jax.tree_util.tree_map(lambda _: 1, node, is_leaf=partial(is_leaf_below_node, node))
-
-    prototype = utils.tree_map_with_implicit(replace_subtree_implicits, tree)
-    struct = jax.tree_util.tree_structure(prototype)
-
-    leaves = utils.tree_leaves_with_implicit(tree)
-    leaves = list(chain.from_iterable(
-        jax.tree_util.tree_leaves(leaf, is_leaf=partial(is_leaf_below_node, leaf))
-        if isinstance(leaf, ImplicitArray) else
-        [leaf] for leaf in leaves
-    ))
-    return leaves, struct

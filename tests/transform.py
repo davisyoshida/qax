@@ -29,10 +29,18 @@ class ImplicitConst(ImplicitArray):
     @implicit_op('mul')
     @classmethod
     def mul(cls, primitive, const, other):
+        if isinstance(other, ImplicitConst):
+            return ImplicitConst(const.value * other.value, const.dummy_val, const.shape, const.dtype)
         if other.shape == ():
             new_value = const.value * other
             return ImplicitConst(new_value, const.dummy_val, const.shape, const.dtype)
         return const.value * other
+
+    def __str__(self):
+        return f'ImplicitConst(value={self.value}, shape={self.shape})'
+
+    def __repr__(self):
+        return str(self)
 
 @pytest.fixture
 def const():
@@ -85,7 +93,7 @@ def test_cond(const):
         assert f(const, True) == const.value * np.prod(const.shape)
         assert f(const, False) == 5 * np.prod(const.shape)
 
-def test_cond_out_shape(const):
+def test_cond_materialize_branch(const):
     @use_implicit_args
     def f(x, y):
         def true_fn(x):
@@ -94,8 +102,36 @@ def test_cond_out_shape(const):
             return jnp.ones(x.shape)
         return jax.lax.cond(y, true_fn, false_fn, x)
 
-    with pytest.warns(UserWarning, match='Branches of cond have different output shapes'):
-        f(const, True)
+    result = f(const, True)
+    assert isinstance(result, jnp.ndarray)
+    assert result.shape == const.shape
+    assert jnp.all(result == const.value)
+
+def test_cond_partial_materialize_branch():
+    @use_implicit_args
+    def f(x, y, z):
+        def true_fn(x, y):
+            return y * y
+
+        def false_fn(x, y):
+            return x * x
+
+        return jax.lax.cond(z, true_fn, false_fn, x, y)
+
+    shape = (2, 3)
+    x = ImplicitConst(2., -173, shape)
+    y = ImplicitConst(
+            value=ImplicitConst(1., -173, ()),
+            dummy_val=-173,
+            shape=shape
+    )
+    #y._materialize()
+
+    result = f(x, y, True)
+    assert isinstance(result, ImplicitConst)
+    assert isinstance(result.value, jnp.ndarray)
+    assert result.shape == (2, 3)
+    assert jnp.all(result.value == 1)
 
 def test_switch(const):
     @use_implicit_args
