@@ -16,23 +16,21 @@ from qax import ImplicitArray, implicit_op, use_implicit_args
 # To define the behavior we want, we subclass qax.ImplicitArray
 class ImplicitConst(ImplicitArray):
     def __init__(self, value, shape):
-        # The ImplicitArray constructor needs a shape and dtype
-        # so that we can pretend to be a tensor of that description
-
-        # This is in case we get a python scalar as an argument
+        # Get the dtype in a way which will work for JAX types or python scalars
         dtype = jax.core.get_aval(value).dtype
 
+        # The ImplicitArray constructor needs a shape and dtype
+        # so that we can pretend to be a tensor of that description
         super().__init__(shape=shape, dtype=dtype)
         self.value = value
 
     # ImplicitArray subclasses automatically get registered as pytrees
     # so they need to define flattening and unflattening behavior
-
     def flatten(self):
         """
         Should return:
             - an iterable of (name, child) tuples
-            - Any auxiliary data (shape and dtype are handled by the base class we 
+            - Any auxiliary data (shape and dtype are handled by the base class so we don't need to manage them)
         """
         return [('value', self.value)], ()
 
@@ -106,7 +104,6 @@ class ImplicitConst(ImplicitArray):
     def materialize(self):
         return jnp.full(self.shape, self.value, dtype=self.dtype)
 
-
     def __str__(self):
         return f'ImplicitConst({self.value}, {self.shape})'
 
@@ -151,3 +148,11 @@ print(nested_result) # ImplicitConst(ImplicitConst(-9.779541969299316, ()), (5, 
 ```
 
 The API might change at any time since there's a high chance there are issues I'm not aware of or preferable ways to implement things. That being said, it would be super helpful if people could try it and give feedback, or tell me about possible use case they find.
+
+## Installation
+
+```bash
+git clone https://github.com/davisyoshida/qax.git
+cd qax
+pip install -e .
+```
