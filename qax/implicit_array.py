@@ -11,6 +11,7 @@ import jax.interpreters.partial_eval as pe
 from jax.tree_util import register_pytree_with_keys_class
 
 from . import constants
+from .primitives import get_primitive_handler
 from . import utils
 
 def _use_implicit_flat(f_flat):
@@ -35,7 +36,6 @@ def use_implicit_args(f):
     return inner
 
 class ImplicitArray(ABC):
-    op_registry = None
     commute_ops = True
 
     def __init__(self, shape, dtype):
@@ -109,17 +109,14 @@ class ImplicitArray(ABC):
         return obj
 
     def handle_primitive(self, primitive, *args, params):
-        if primitive.name not in self.op_registry:
-            return NotImplemented
-
-        handler = lu.wrap_init(partial(self.op_registry[primitive.name], primitive))
+        handler = lu.wrap_init(partial(get_primitive_handler(primitive), primitive))
         use_params = params
-        maybe_kwargs = {'params': params} if params else {}
 
         if len(args) == 2 and self.commute_ops:
             args, use_params = _maybe_swap_args(primitive.name, args, use_params)
 
-        flat_args, in_tree = utils.flatten_one_implicit_layer((args, maybe_kwargs))
+        #maybe_kwargs = {'params': params} if params else {}
+        flat_args, in_tree = utils.flatten_one_implicit_layer((args, params))
         flat_handler, out_tree = flatten_fun(handler, in_tree)
 
         result = use_implicit_args(flat_handler.call_wrapped)(*flat_args)
@@ -127,7 +124,6 @@ class ImplicitArray(ABC):
 
     def __init_subclass__(cls, commute_ops=True, **kwargs):
         super().__init_subclass__(**kwargs)
-        cls.op_registry = {}
 
         if 'tree_unflatten' in cls.__dict__:
             raise TypeError(
@@ -144,32 +140,9 @@ class ImplicitArray(ABC):
         core.pytype_aval_mappings[cls] = lambda x: x.aval
 
         register_pytree_with_keys_class(cls)
-        for imp_op in cls.__dict__.values():
-            if not isinstance(imp_op, _ImplicitOp):
-                continue
-            for name in imp_op.names:
-                cls.op_registry[name] = partial(imp_op, cls)
 
 def _materialize_all(it):
     return [val._materialize() if isinstance(val, ImplicitArray) else val for val in it]
-
-class _ImplicitOp:
-    def __init__(self, names, op_fn):
-        self.names = names
-        self.op_fn = op_fn
-
-    def __call__(self, cls, *args, **kwargs):
-        if isinstance(self.op_fn, classmethod):
-            return self.op_fn.__func__(cls, *args, **kwargs)
-        return self.op_fn(*args, **kwargs)
-
-def implicit_op(op_names):
-    if isinstance(op_names, str):
-        op_names = [op_names]
-    def decorator(op_fn):
-        return _ImplicitOp(op_names, op_fn)
-    return decorator
-
 def _maybe_swap_args(op_name, args, params):
     if isinstance(args[0], ImplicitArray):
         return args, params
@@ -181,7 +154,6 @@ def _maybe_swap_args(op_name, args, params):
 
     new_params = {**params}
     new_params['dimension_numbers'] = (
-
         params['dimension_numbers'][0][::-1],
         params['dimension_numbers'][1][::-1],
     )
@@ -222,6 +194,8 @@ class ImplicitArrayTrace(core.Trace):
                     vals[idx] = val._materialize()
 
             outs = vals[implicit_idx].handle_primitive(primitive, *vals, params=params)
+            #handle_fn = get_primitive_handler(primitive)
+            #(primitive, *vals, **params)#params=params)
             if outs is NotImplemented:
                 warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
 

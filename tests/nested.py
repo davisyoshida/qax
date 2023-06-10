@@ -1,7 +1,9 @@
+import warnings
+
 import jax
 import jax.numpy as jnp
 
-from qax.implicit_array import ImplicitArray, implicit_op, use_implicit_args
+from qax import ImplicitArray, use_implicit_args, primitive_handler
 
 class Outer(ImplicitArray):
     def __init__(self, x):
@@ -18,9 +20,9 @@ class Outer(ImplicitArray):
     def materialize(cls, outer):
         return 2 * (outer.x ** 1)
 
-    @implicit_op('mul')
-    def mul(primitive, arg, other):
-        return Outer(arg.x * other)
+@primitive_handler(jax.lax.mul_p)
+def mul(primitive, arg : Outer, other : jax.Array):
+    return Outer(arg.x * other)
 
 class Inner(ImplicitArray):
     def __init__(self, value, shape, dtype):
@@ -31,16 +33,16 @@ class Inner(ImplicitArray):
     def materialize(cls, inner):
         return jnp.full(inner.shape, inner.value, dtype=inner.dtype)
 
-    @implicit_op('integer_pow')
-    def pow(primitive, arg, params):
-        new_value = arg.value ** params['y']
-        return Inner(new_value, arg.shape, arg.dtype)
-
     def flatten(self):
         return [('value', self.value)], None
 
     def unflatten(self, aux_data, children):
         self.value, = children
+
+@primitive_handler(jax.lax.integer_pow_p)
+def pow(primitive, arg : Inner, *, y):
+    new_value = arg.value ** y
+    return Inner(new_value, arg.shape, arg.dtype)
 
 def test_nested():
     @use_implicit_args
@@ -59,5 +61,7 @@ def test_nested_with_operation():
 
     inner = Inner(3, shape=(2, 3), dtype=jnp.float32)
     nested = Outer(inner)
-    result = f(nested)
+    with warnings.catch_warnings():
+        warnings.filterwarnings('error', 'Primitive mul was not handled by class Outer')
+        result = f(nested)
     assert result == 36

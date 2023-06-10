@@ -1,8 +1,9 @@
+from typing import Union
+
 import jax
 import jax.numpy as jnp
 
-from qax import ImplicitArray, implicit_op, use_implicit_args
-
+from qax import ImplicitArray, default_handler, primitive_handler, use_implicit_args
 
 # WARNING: These constants are currently incomplete! They only include a few ops each
 from qax.constants import ELEMENTWISE_BINOPS, ELEMENTWISE_UNOPS, REDUCTION_OPS
@@ -22,35 +23,32 @@ class NullableArray(ImplicitArray):
     def materialize(self):
         return self.val
 
-    @implicit_op(ELEMENTWISE_UNOPS)
-    @classmethod
-    def handle_unop(cls, primitive, nullable_val, params=None):
-        val = cls.default_handler(primitive, nullable_val.val, params=params)
-        return NullableArray(val, nullable_val.mask)
+@primitive_handler(ELEMENTWISE_UNOPS)
+def handle_unop(primitive, nullable_val : NullableArray, **params):
+    val = default_handler(primitive, nullable_val.val, **params)
+    return NullableArray(val, nullable_val.mask)
 
-    @implicit_op(ELEMENTWISE_BINOPS)
-    @classmethod
-    def handle_binop(cls, primitive, lhs, rhs, params=None):
-        lhs_is_nullable = isinstance(lhs, NullableArray)
-        rhs_is_nullable = isinstance(rhs, NullableArray)
-        mask = lhs.mask if lhs_is_nullable else None
+@primitive_handler(ELEMENTWISE_BINOPS)
+def handle_binop(primitive, lhs : Union[NullableArray, jnp.ndarray], rhs : Union[NullableArray, jnp.ndarray], **params):
+    lhs_is_nullable = isinstance(lhs, NullableArray)
+    rhs_is_nullable = isinstance(rhs, NullableArray)
+    mask = lhs.mask if lhs_is_nullable else None
 
-        if lhs_is_nullable:
-            lhs = lhs.val
+    if lhs_is_nullable:
+        lhs = lhs.val
 
-        if rhs_is_nullable:
-            mask = rhs.mask if mask is None else mask & rhs.mask
-            rhs = rhs.val
+    if rhs_is_nullable:
+        mask = rhs.mask if mask is None else mask & rhs.mask
+        rhs = rhs.val
 
-        out_val = cls.default_handler(primitive, lhs, rhs, params=params)
-        return NullableArray(out_val, mask)
+    out_val = default_handler(primitive, lhs, rhs, **params)
+    return NullableArray(out_val, mask)
 
-    @implicit_op(REDUCTION_OPS)
-    @classmethod
-    def handle_reduction(cls, primitive, val, params=None):
-        new_val = cls.default_handler(primitive, val, params=params)
-        new_mask = cls.default_handler(jax.lax.reduce_and_p, val.mask, params=params)
-        return NullableArray(new_val, new_mask)
+@primitive_handler(REDUCTION_OPS)
+def handle_reduction(primitive, null_arr : NullableArray, **params):
+    new_val = default_handler(primitive, null_arr.val, **params)
+    new_mask = default_handler(jax.lax.reduce_and_p, null_arr.mask, **params)
+    return NullableArray(new_val, new_mask)
 
 @jax.jit
 @use_implicit_args

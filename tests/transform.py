@@ -1,13 +1,15 @@
 from functools import partial
+from typing import Union
 import warnings
 
 import jax
+from jax.core import Primitive
 from jax.experimental import pjit
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from qax.implicit_array import ImplicitArray, implicit_op, use_implicit_args
+from qax import ImplicitArray, use_implicit_args, primitive_handler
 
 WARN_PATTERN = 'implicit args will be materialized'
 
@@ -26,21 +28,23 @@ class ImplicitConst(ImplicitArray):
     def unflatten(self, aux_data, children):
         self.value, self.dummy_val = children
 
-    @implicit_op('mul')
-    @classmethod
-    def mul(cls, primitive, const, other):
-        if isinstance(other, ImplicitConst):
-            return ImplicitConst(const.value * other.value, const.dummy_val, const.shape, const.dtype)
-        if other.shape == ():
-            new_value = const.value * other
-            return ImplicitConst(new_value, const.dummy_val, const.shape, const.dtype)
-        return const.value * other
-
     def __str__(self):
         return f'ImplicitConst(value={self.value}, shape={self.shape})'
 
     def __repr__(self):
         return str(self)
+
+@primitive_handler([jax.lax.mul_p, jax.lax.sub_p])
+def mul_handler(primitive : Primitive, a : ImplicitConst, b : Union[ImplicitConst, jnp.ndarray], **params):
+    def op(lhs, rhs):
+        return lhs * rhs if primitive.name == 'mul' else lhs - rhs
+    assert not params
+    if isinstance(b, ImplicitConst):
+        return ImplicitConst(op(a.value, b.value), a.dummy_val, a.shape, a.dtype)
+    if b.shape == ():
+        new_value = op(a.value, b)
+        return ImplicitConst(new_value, a.dummy_val, a.shape, a.dtype)
+    return op(a.value, b)
 
 @pytest.fixture
 def const():
