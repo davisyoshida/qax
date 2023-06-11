@@ -35,7 +35,7 @@ class ImplicitConst(ImplicitArray):
         return str(self)
 
 @primitive_handler([jax.lax.mul_p, jax.lax.sub_p])
-def mul_handler(primitive : Primitive, a : ImplicitConst, b : Union[ImplicitConst, jnp.ndarray], **params):
+def mul_handler(primitive : Primitive, a : ImplicitConst, b : Union[ImplicitConst, jax.Array], **params):
     def op(lhs, rhs):
         return lhs * rhs if primitive.name == 'mul' else lhs - rhs
     assert not params
@@ -107,7 +107,7 @@ def test_cond_materialize_branch(const):
         return jax.lax.cond(y, true_fn, false_fn, x)
 
     result = f(const, True)
-    assert isinstance(result, jnp.ndarray)
+    assert isinstance(result, jax.Array)
     assert result.shape == const.shape
     assert jnp.all(result == const.value)
 
@@ -133,7 +133,7 @@ def test_cond_partial_materialize_branch():
 
     result = f(x, y, True)
     assert isinstance(result, ImplicitConst)
-    assert isinstance(result.value, jnp.ndarray)
+    assert isinstance(result.value, jax.Array)
     assert result.shape == (2, 3)
     assert jnp.all(result.value == 1)
 

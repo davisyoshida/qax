@@ -61,7 +61,7 @@ def test_prefix():
     )
 
     full_materialized_c1, _ = _get_prefix(c1, jnp.ones(10))
-    assert isinstance(full_materialized_c1, jnp.ndarray)
+    assert isinstance(full_materialized_c1, jax.Array)
     assert jnp.all(full_materialized_c1 == jnp.zeros(10))
 
     c3 = Container(

@@ -29,7 +29,7 @@ def handle_unop(primitive, nullable_val : NullableArray, **params):
     return NullableArray(val, nullable_val.mask)
 
 @primitive_handler(ELEMENTWISE_BINOPS)
-def handle_binop(primitive, lhs : Union[NullableArray, jnp.ndarray], rhs : Union[NullableArray, jnp.ndarray], **params):
+def handle_binop(primitive, lhs : Union[NullableArray, jax.Array], rhs : Union[NullableArray, jnp.ndarray], **params):
     lhs_is_nullable = isinstance(lhs, NullableArray)
     rhs_is_nullable = isinstance(rhs, NullableArray)
     mask = lhs.mask if lhs_is_nullable else None

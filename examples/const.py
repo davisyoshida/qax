@@ -57,7 +57,7 @@ class ImplicitConst(ImplicitArray):
 # For commutative ops, the ImplicitArray instance will always be made the
 # lhs, but this isn't true for non-commutative ops as we'll see below
 @primitive_handler('mul')
-def mul(primitive, a: ImplicitConst, b: jnp.ndarray):
+def mul(primitive, a: ImplicitConst, b: jax.Array):
     """
     Arguments:
         - primitive: A JAX primitive
