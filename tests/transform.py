@@ -141,7 +141,7 @@ def test_switch(const):
     @use_implicit_args
     def f(x, i):
         branch_fn = lambda a, x: jnp.sum(a * x)
-        branches = [partial(branch_fn, i) for i in range(3)]
+        branches = [partial(branch_fn, jnp.asarray(i)) for i in range(3)]
 
         return jax.lax.switch(i, branches, x)
 

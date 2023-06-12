@@ -11,7 +11,7 @@ import jax.interpreters.partial_eval as pe
 from jax.tree_util import register_pytree_with_keys_class
 
 from . import constants
-from .primitives import get_primitive_handler
+from .primitives import ArrayValue, get_primitive_handler
 from . import utils
 
 def _use_implicit_flat(f_flat):
@@ -35,7 +35,7 @@ def use_implicit_args(f):
         return jax.tree_util.tree_unflatten(out_tree(), outs_flat)
     return inner
 
-class ImplicitArray(ABC):
+class ImplicitArray(ArrayValue):
     commute_ops = True
 
     def __init__(self, shape, dtype):
