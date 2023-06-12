@@ -138,27 +138,18 @@ class ImplicitArray(ABC):
             )
 
         core.pytype_aval_mappings[cls] = lambda x: x.aval
-
         register_pytree_with_keys_class(cls)
 
 def _materialize_all(it):
     return [val._materialize() if isinstance(val, ImplicitArray) else val for val in it]
+
 def _maybe_swap_args(op_name, args, params):
     if isinstance(args[0], ImplicitArray):
         return args, params
     if op_name in constants.COMMUTATIVE_OPS:
         return args[::-1], params
 
-    if op_name != 'dot_general':
-        return args, params
-
-    new_params = {**params}
-    new_params['dimension_numbers'] = (
-        params['dimension_numbers'][0][::-1],
-        params['dimension_numbers'][1][::-1],
-    )
-
-    return args[::-1], new_params
+    return args, params
 
 class ImplicitArrayTracer(core.Tracer):
     def __init__(self, trace, value):
@@ -187,15 +178,7 @@ class ImplicitArrayTrace(core.Trace):
         if primitive.name in _default_handlers:
             outs = _default_handlers[primitive.name](primitive, *vals, params=params)
         else:
-            kind = type(vals[implicit_idx])
-            for idx, val in enumerate(vals[implicit_idx + 1:], implicit_idx + 1):
-                if isinstance(val, ImplicitArray) and not isinstance(val, kind):
-                    warnings.warn(f'Encountered {primitive.name} with heterogenous implicit inputs. Argument of type {type(val)} will be materialized.')
-                    vals[idx] = val._materialize()
-
             outs = vals[implicit_idx].handle_primitive(primitive, *vals, params=params)
-            #handle_fn = get_primitive_handler(primitive)
-            #(primitive, *vals, **params)#params=params)
             if outs is NotImplemented:
                 warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
 
@@ -264,7 +247,6 @@ def _match_branches(branches, arg_vals):
 def _handle_cond(primitive, *vals, params):
     cond_val, *arg_vals = vals
     subfuns, bind_params = primitive.get_bind_params(params)
-
 
     new_branches, out_struct, flat_inputs = _match_branches(params['branches'], arg_vals)
     bind_params['branches'] = new_branches
