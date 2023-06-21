@@ -3,6 +3,8 @@ import jax.numpy as jnp
 from jax.tree_util import tree_structure
 import pytest
 
+import optax
+
 from qax import utils, ImplicitArray
 
 class Container(ImplicitArray):

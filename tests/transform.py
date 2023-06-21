@@ -11,7 +11,7 @@ import pytest
 
 from qax import ImplicitArray, use_implicit_args, primitive_handler
 
-WARN_PATTERN = 'implicit args will be materialized'
+WARN_PATTERN = '.*implicit args will be materialized'
 
 class ImplicitConst(ImplicitArray):
     def __init__(self, value, dummy_val, shape, dtype=jnp.float32):
@@ -146,7 +146,7 @@ def test_switch(const):
         return jax.lax.switch(i, branches, x)
 
     with warnings.catch_warnings():
-        warnings.filterwarnings('error', message=WARN_PATTERN)
+        warnings.filterwarnings('error', message='.*switch was not handled')
         assert f(const, 0) == 0
 
 def test_no_implicit_args():

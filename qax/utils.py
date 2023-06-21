@@ -1,9 +1,15 @@
+from collections import namedtuple
 from functools import partial, wraps
 from itertools import chain
 
 import jax
 from jax import core
 from jax import tree_util
+import jax.numpy as jnp
+
+from jax._src.dtypes import float0
+
+import optax
 
 from . import implicit_array
 
@@ -40,7 +46,9 @@ def combine_leaf_predicate(base_fn, is_leaf):
         return base_fn(*args, is_leaf=combined_is_leaf)
     return new_fn
 
-leaf_predicate = lambda x: isinstance(x, implicit_array.ImplicitArray)
+def leaf_predicate(x):
+    return isinstance(x, implicit_array.ImplicitArray)
+
 tree_map_with_implicit = combine_leaf_predicate(jax.tree_map, leaf_predicate)
 tree_map_with_path_with_implicit = combine_leaf_predicate(tree_util.tree_map_with_path, leaf_predicate)
 tree_flatten_with_implicit = combine_leaf_predicate(tree_util.tree_flatten, leaf_predicate)
@@ -196,3 +204,36 @@ def get_common_prefix_transforms(trees):
             stack.append((path_prefix + (i,), leaf_group))
 
     return [_get_pruning_transform(tree, materialization_paths) for tree in trees]
+
+def freeze_qax_keys(optimizer : optax.GradientTransformation, arr_type, freeze_keys):
+    freeze_keys = set(freeze_keys)
+    def label_leaf(leaf):
+        if not isinstance(leaf, arr_type):
+            return 'train'
+
+        children, aux_data = leaf.tree_flatten_with_keys()
+        labels = ['freeze' if key in freeze_keys else 'train' for key, _ in children]
+        struct = leaf.tree_unflatten(aux_data, labels)
+        return struct
+
+    def label_fn(root):
+        return jax.tree_map(label_leaf, root, is_leaf=lambda x: isinstance(x, arr_type))
+
+    multi_transformed_optimizer = optax.multi_transform(
+        {'freeze': optax.set_to_zero(), 'train': optimizer},
+        label_fn
+    )
+
+    def new_update(grads, opt_state, params):
+        def map_float0(param, grad):
+            if grad.dtype == float0:
+                return jnp.zeros_like(param)
+            return grad
+
+        fixed_grads = jax.tree_map(map_float0, params, grads)
+        return multi_transformed_optimizer.update(fixed_grads, opt_state, params)
+
+    return optax.GradientTransformation(
+        multi_transformed_optimizer.init,
+        new_update
+    )

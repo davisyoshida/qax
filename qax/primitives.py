@@ -1,6 +1,4 @@
 from abc import ABC
-from collections import defaultdict
-from functools import wraps
 from itertools import count
 
 import jax
@@ -22,7 +20,7 @@ def get_lax_primitive_by_name(name):
 def get_primitive_handler(primitive):
     handler = _dispatch.functions.get(primitive)
     if handler is None:
-        def _not_impl_handler(primitive : jax.core.Primitive, *args : ArrayValue, **kwargs):
+        def _not_impl_handler(primitive : jax.core.Primitive, *args, **kwargs):
             return NotImplemented
         _not_impl_handler.__doc__ = 'Default handler for {primitive.name}'
         handler = Function(_not_impl_handler)
@@ -39,8 +37,6 @@ def primitive_handler(primitives, precedence=0):
             if isinstance(primitive, str):
                 primitive = get_lax_primitive_by_name(primitive)
             handler = get_primitive_handler(primitive)
-            if isinstance(fn, Function):
-                fn = fn._f
             handler.register(fn, precedence=precedence)
 
     return decorator

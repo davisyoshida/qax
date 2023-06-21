@@ -11,7 +11,7 @@ import jax.interpreters.partial_eval as pe
 from jax.tree_util import register_pytree_with_keys_class
 
 from . import constants
-from .primitives import ArrayValue, get_primitive_handler
+from .primitives import ArrayValue, default_handler, get_primitive_handler
 from . import utils
 
 def _use_implicit_flat(f_flat):
@@ -175,11 +175,16 @@ class ImplicitArrayTrace(core.Trace):
         outs = NotImplemented
         vals = [t.value for t in tracers]
         implicit_idx = next(i for i, v in enumerate(vals) if isinstance(v, ImplicitArray))
-        if primitive.name in _default_handlers:
-            outs = _default_handlers[primitive.name](primitive, *vals, params=params)
-        else:
-            outs = vals[implicit_idx].handle_primitive(primitive, *vals, params=params)
-            if outs is NotImplemented:
+
+        # First try to handle the primitive using custom handlers
+        outs = vals[implicit_idx].handle_primitive(primitive, *vals, params=params)
+
+        if outs is NotImplemented:
+            # For higher order primitives most users won't implement custom
+            # logic, so there shouldn't be a warning
+            if primitive.name in _default_handlers:
+                outs = _default_handlers[primitive.name](primitive, *vals, params=params)
+            else:
                 warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
 
         if outs is NotImplemented:
