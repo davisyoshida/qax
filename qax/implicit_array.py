@@ -406,12 +406,18 @@ def _broadcast_tuple(t, trees):
     ))
 
 def _get_materialization_aval(imp_arr):
-    with _aval_discovery_context():
+    with _aval_discovery_context(), _filter_materialization_warnings():
         result = jax.eval_shape(
             partial(utils.materialize_nested, full=True),
             imp_arr
         )
     return result
+
+@contextmanager
+def _filter_materialization_warnings():
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message='Primitive.*was not handled')
+        yield
 
 _AVAL_ERROR_MESSAGE = (
     '{} was not set during initialization. Shape and dtype may be set by:'

@@ -1,4 +1,3 @@
-from collections import namedtuple
 from functools import partial, wraps
 from itertools import chain
 
@@ -14,6 +13,21 @@ from jax._src.dtypes import float0
 import optax
 
 from . import implicit_array as ia
+
+class _EmptyNodeCls:
+    _instance = None
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+EmptyNode = _EmptyNodeCls()
+
+tree_util.register_pytree_node(
+    _EmptyNodeCls,
+    lambda node: ((), None),
+    lambda _, __: EmptyNode
+)
 
 def vmap_all_but_one(f, axis, out_ndim=0):
     """
@@ -49,7 +63,7 @@ def combine_leaf_predicate(base_fn, is_leaf):
     return new_fn
 
 def leaf_predicate(x):
-    return isinstance(x, ia.ImplicitArray)
+    return isinstance(x, (ia.ImplicitArray, _EmptyNodeCls))
 
 tree_map_with_implicit = combine_leaf_predicate(jax.tree_map, leaf_predicate)
 tree_map_with_path_with_implicit = combine_leaf_predicate(tree_util.tree_map_with_path, leaf_predicate)
@@ -203,7 +217,7 @@ def get_common_prefix_transforms(trees):
 
     return [_get_pruning_transform(tree, materialization_paths) for tree in trees]
 
-def freeze_qax_keys(optimizer : optax.GradientTransformation, arr_type, freeze_keys):
+def freeze_keys(optimizer : optax.GradientTransformation, arr_type, freeze_keys):
     freeze_keys = set(freeze_keys)
     def label_leaf(leaf):
         if not isinstance(leaf, arr_type):
