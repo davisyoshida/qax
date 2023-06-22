@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from functools import partial
-from typing import Union
+from typing import Any, Union
 import warnings
 
 import jax
@@ -13,26 +14,14 @@ from qax import ImplicitArray, use_implicit_args, primitive_handler
 
 WARN_PATTERN = '.*implicit args will be materialized'
 
+@dataclass
 class ImplicitConst(ImplicitArray):
-    def __init__(self, value, dummy_val, shape, dtype=jnp.float32):
-        super().__init__(shape=shape, dtype=dtype)
-        self.value = value
-        self.dummy_val = dummy_val
+    default_dtype = jnp.float32
+    value : Any
+    dummy_val : Any
 
     def materialize(self):
         return jnp.full(self.shape, self.value, dtype=self.dtype)
-
-    def flatten(self):
-        return [('value', self.value), ('dummy_val', self.dummy_val)], ()
-
-    def unflatten(self, aux_data, children):
-        self.value, self.dummy_val = children
-
-    def __str__(self):
-        return f'ImplicitConst(value={self.value}, shape={self.shape})'
-
-    def __repr__(self):
-        return str(self)
 
 @primitive_handler([jax.lax.mul_p, jax.lax.sub_p])
 def mul_handler(primitive : Primitive, a : ImplicitConst, b : Union[ImplicitConst, jax.Array], **params):
@@ -40,22 +29,23 @@ def mul_handler(primitive : Primitive, a : ImplicitConst, b : Union[ImplicitCons
         return lhs * rhs if primitive.name == 'mul' else lhs - rhs
     assert not params
     if isinstance(b, ImplicitConst):
-        return ImplicitConst(op(a.value, b.value), a.dummy_val, a.shape, a.dtype)
+        return ImplicitConst(op(a.value, b.value), a.dummy_val, shape=a.shape, dtype=a.dtype)
     if b.shape == ():
         new_value = op(a.value, b)
-        return ImplicitConst(new_value, a.dummy_val, a.shape, a.dtype)
+        return ImplicitConst(new_value, a.dummy_val, shape=a.shape, dtype=a.dtype)
     return op(a.value, b)
 
 @pytest.fixture
 def const():
     shape = (2, 3)
-    return ImplicitConst(2, -173, shape, dtype=jnp.float32)
+    return ImplicitConst(2, -173, shape=shape)
 
 def test_transform(const):
     @use_implicit_args
     def f(x, y):
         return x * y
 
+    print(f'Const: {const}')
     assert f(const, jnp.ones(const.shape))[0, 0] == const.value
 
 def test_pjit(const):
@@ -123,9 +113,9 @@ def test_cond_partial_materialize_branch():
         return jax.lax.cond(z, true_fn, false_fn, x, y)
 
     shape = (2, 3)
-    x = ImplicitConst(2., -173, shape)
+    x = ImplicitConst(2., -173, shape=shape)
     y = ImplicitConst(
-            value=ImplicitConst(1., -173, ()),
+            value=ImplicitConst(1., -173, shape=()),
             dummy_val=-173,
             shape=shape
     )
@@ -158,7 +148,11 @@ def test_vmap():
     def f(x, y):
         return jnp.sum(x * y)
 
-    xs = ImplicitConst(jnp.arange(3), jnp.arange(-100, -97), (7, 11))
+    xs = ImplicitConst(
+        jnp.arange(3),
+        jnp.arange(-100, -97),
+        shape=(7, 11)
+    )
     ys = jax.random.normal(jax.random.PRNGKey(0), (7, 11))
 
     x_value = jnp.tile(jnp.arange(3)[:, None, None], (1, 7, 11))

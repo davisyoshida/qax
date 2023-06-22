@@ -1,24 +1,20 @@
-from typing import Union
+"""
+Example of an ImplicitArray which represents an array + a boolean mask representing the validity of each entry.
+This is a proof of concept and is not optimized for performance.
+"""
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
 
-from qax import ImplicitArray, default_handler, primitive_handler, use_implicit_args
+from qax import ArrayValue, ImplicitArray, default_handler, primitive_handler, use_implicit_args
 
-# WARNING: These constants are currently incomplete! They only include a few ops each
 from qax.constants import ELEMENTWISE_BINOPS, ELEMENTWISE_UNOPS, REDUCTION_OPS
 
+@dataclass
 class NullableArray(ImplicitArray):
-    def __init__(self, val, mask):
-        super().__init__(shape=val.shape, dtype=val.dtype)
-        self.val = val
-        self.mask = mask
-
-    def flatten(self):
-        return [('val', self.val), ('mask', self.mask)], ()
-
-    def unflatten(self, aux_data, children):
-        self.val, self.mask = children
+    val : ArrayValue
+    mask : ArrayValue
 
     def materialize(self):
         return self.val
@@ -29,7 +25,7 @@ def handle_unop(primitive, nullable_val : NullableArray, **params):
     return NullableArray(val, nullable_val.mask)
 
 @primitive_handler(ELEMENTWISE_BINOPS)
-def handle_binop(primitive, lhs : Union[NullableArray, jax.Array], rhs : Union[NullableArray, jnp.ndarray], **params):
+def handle_binop(primitive, lhs : ArrayValue, rhs : ArrayValue, **params):
     lhs_is_nullable = isinstance(lhs, NullableArray)
     rhs_is_nullable = isinstance(rhs, NullableArray)
     mask = lhs.mask if lhs_is_nullable else None

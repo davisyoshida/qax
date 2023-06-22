@@ -5,13 +5,15 @@ from itertools import chain
 import jax
 from jax import core
 from jax import tree_util
+from jax.api_util import flatten_fun_nokwargs
+import jax.linear_util as lu
 import jax.numpy as jnp
 
 from jax._src.dtypes import float0
 
 import optax
 
-from . import implicit_array
+from . import implicit_array as ia
 
 def vmap_all_but_one(f, axis, out_ndim=0):
     """
@@ -47,7 +49,7 @@ def combine_leaf_predicate(base_fn, is_leaf):
     return new_fn
 
 def leaf_predicate(x):
-    return isinstance(x, implicit_array.ImplicitArray)
+    return isinstance(x, ia.ImplicitArray)
 
 tree_map_with_implicit = combine_leaf_predicate(jax.tree_map, leaf_predicate)
 tree_map_with_path_with_implicit = combine_leaf_predicate(tree_util.tree_map_with_path, leaf_predicate)
@@ -58,7 +60,7 @@ tree_structure_with_implicit = combine_leaf_predicate(tree_util.tree_structure, 
 
 def flatten_one_implicit_layer(tree):
     def is_leaf_below_node(node, x):
-        return isinstance(x, implicit_array.ImplicitArray) and x is not node
+        return isinstance(x, ia.ImplicitArray) and x is not node
 
     def replace_subtree_implicits(node):
         return tree_util.tree_map(lambda _: 1, node, is_leaf=partial(is_leaf_below_node, node))
@@ -69,7 +71,7 @@ def flatten_one_implicit_layer(tree):
     leaves = tree_leaves_with_implicit(tree)
     leaves = list(chain.from_iterable(
         tree_util.tree_leaves(leaf, is_leaf=partial(is_leaf_below_node, leaf))
-        if isinstance(leaf, implicit_array.ImplicitArray) else
+        if isinstance(leaf, ia.ImplicitArray) else
         [leaf] for leaf in leaves
     ))
     return leaves, struct
@@ -81,7 +83,7 @@ def implicit_depth(tree):
         next_leaves = []
         any_implicit = False
         for leaf in leaves:
-            if not isinstance(leaf, implicit_array.ImplicitArray):
+            if not isinstance(leaf, ia.ImplicitArray):
                 continue
             any_implicit = True
             next_leaves.extend(flatten_one_implicit_layer(leaf)[0])
@@ -96,8 +98,8 @@ def _map_leaves_with_implicit_path(f, leaves, is_leaf, path_prefix=()):
     mapped_leaves = []
     for idx, leaf in enumerate(leaves):
         path = path_prefix + (idx,)
-        if not isinstance(leaf, implicit_array.ImplicitArray) or is_leaf(path, leaf):
-            mapped_leaves.append(f(path, leaf))
+        if not isinstance(leaf, ia.ImplicitArray) or is_leaf(path, leaf):
+            mapped_leaves.append(f(leaf))
             continue
 
         subtree, substruct = flatten_one_implicit_layer(leaf)
@@ -116,14 +118,10 @@ def _get_pruning_transform(tree, materialization_paths):
     def is_leaf(path, leaf):
         return path in materialization_paths
 
-    def f(path, node):
-        while isinstance(node, implicit_array.ImplicitArray):
-            node = node._materialize()
-        return node
-
     def materialize_subtrees(tree):
         leaves, struct = tree_flatten_with_implicit(tree)
-        mapped_leaves =  _map_leaves_with_implicit_path(f, leaves, is_leaf)
+
+        mapped_leaves =  _map_leaves_with_implicit_path(partial(materialize_nested, full=True), leaves, is_leaf)
         return tree_util.tree_unflatten(struct, mapped_leaves)
 
     return materialize_subtrees
@@ -173,7 +171,7 @@ def get_common_prefix_transforms(trees):
     materialization_paths = set()
     while stack:
         path_prefix, nodes = stack.pop()
-        if not any(isinstance(node, implicit_array.ImplicitArray) for node in nodes):
+        if not any(isinstance(node, ia.ImplicitArray) for node in nodes):
                continue
 
         all_leaves, all_structures = zip(*(
@@ -237,3 +235,25 @@ def freeze_qax_keys(optimizer : optax.GradientTransformation, arr_type, freeze_k
         multi_transformed_optimizer.init,
         new_update
     )
+
+def materialize_nested(implicit_arr, full=False):
+    """
+    Materialize an ImplicitArray instance, handling the case where implicit_arr.materialize()
+    involves further ImplicitArray instances.
+    Arguments:
+        implicit_arr: An ImplicitArray instance
+        full: If True, repeatedly materialize until the result is a concrete array
+    Returns:
+        The materialized array
+    """
+    while isinstance(implicit_arr, ia.ImplicitArray):
+        wrapped = lu.wrap_init(type(implicit_arr).materialize)
+        flat, in_tree = flatten_one_implicit_layer((implicit_arr,))
+        flat_fn, out_tree = flatten_fun_nokwargs(wrapped, in_tree)
+        out_flat = ia.use_implicit_args(flat_fn.call_wrapped)(*flat)
+        implicit_arr = jax.tree_util.tree_unflatten(out_tree(), out_flat)
+
+        if not full:
+            break
+
+    return implicit_arr

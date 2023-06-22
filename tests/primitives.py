@@ -1,9 +1,11 @@
+from dataclasses import dataclass
+
 import jax
 import jax.numpy as jnp
 
 import pytest
 
-from qax import use_implicit_args, ImplicitArray, primitive_handler, default_handler
+from qax import ArrayValue, use_implicit_args, ImplicitArray, primitive_handler, default_handler
 from qax.constants import CUMULATIVE_REDUCTION_OPS, ELEMENTWISE_UNOPS, ELEMENTWISE_BINOPS, REDUCTION_OPS
 
 primitive_example_params = {
@@ -36,23 +38,13 @@ input_dtypes = {
 }
 
 def make_class_for_primitive(primitive):
+    @dataclass
     class StackedArray(ImplicitArray):
-        def __init__(self, a, b):
-            assert a.shape[1:] == b.shape[1:]
-            assert a.dtype == b.dtype
-            combined_shape = (a.shape[0] + b.shape[0], *a.shape[1:])
-            super().__init__(combined_shape, a.dtype)
-            self.a = a
-            self.b = b
+        a : ArrayValue
+        b : ArrayValue
 
         def materialize(self):
             return jnp.concatenate((self.a, self.b), axis=0)
-
-        def flatten(self):
-            return [('a', self.a), ('b', self.b)], ()
-
-        def unflatten(self, aux, children):
-            self.a, self.b = children
 
         def __repr__(self):
             return f'StackedArray({self.a}, {self.b})'
@@ -67,7 +59,7 @@ def test_unop(primitive):
     def handler(primitive, arg : StackedArray, **kwargs):
         new_a = default_handler(primitive, arg.a, **kwargs)
         new_b = default_handler(primitive, arg.b, **kwargs)
-        return StackedArray(new_a, new_b)
+        return StackedArray(new_a, new_b,)
 
     lax_primitive = getattr(jax.lax, f'{primitive}_p')
 

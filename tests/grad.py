@@ -1,26 +1,17 @@
+from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 
-from qax import use_implicit_args, ImplicitArray, primitive_handler
+from qax import ArrayValue, use_implicit_args, ImplicitArray, primitive_handler
 
+
+@dataclass
 class TwoMatricesInATrenchcoat(ImplicitArray):
-    def __init__(self, a, b):
-        assert a.shape == b.shape
-        assert a.dtype == b.dtype
-        super().__init__(a.shape, a.dtype)
-
-        self.a = a
-        self.b = b
-
-    def flatten(self):
-        return [('a', self.a), ('b', self.b)], ()
-
-    def unflatten(self, aux, children):
-        self.a, self.b = children
+    a : ArrayValue
+    b : ArrayValue
 
     def materialize(self):
         return self.a + self.b
-
 
 @primitive_handler('mul')
 def handler(primitive, x : TwoMatricesInATrenchcoat, y : jax.Array):

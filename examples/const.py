@@ -1,20 +1,42 @@
+from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from qax import ImplicitArray, primitive_handler, use_implicit_args, default_handler
+from qax import aux_field, ArrayValue, ImplicitArray, primitive_handler, use_implicit_args, default_handler
 
 # To define the behavior we want, we subclass qax.ImplicitArray
+# To define additional fields we also need to mark this class as
+# a dataclass
+
+@dataclass
 class ImplicitConst(ImplicitArray):
-    def __init__(self, value, shape):
-        # The ImplicitArray constructor needs a shape and dtype
-        # so that we can pretend to be a tensor of that description
+    # Dataclass attributes may be used to define the arrays which
+    # determine the concrete array being represented
+    # In this case it's a single JAX scalar
+    value : ArrayValue
 
-        # This is in case we get a python scalar as an argument
-        dtype = jax.core.get_aval(value).dtype
+    # ImplicitArrays are pytrees, so all attributes are automatically
+    # marked as pytree children. To instead mark one as auxiliary data
+    # use the qax.aux_field decorator
+    my_aux_value : str = aux_field(default='some_metadata')
 
-        super().__init__(shape=shape, dtype=dtype)
-        self.value = value
+    # There are several ways to control the shape and dtype of an ImplicitArray
+    # They are:
+    # 1. Pass shape/dtype kwargs to the constructor
+    # 2. Override the compute_shape/commute_dtype methods
+    # 3. Override the default_shape/default_dtype class attributes
+    # 4. Manually override __post_init__ and set the self.shape/self.dtype values yourself
+    # 5. Do none of the above, in which case materialize() will be abstractly evaluated
+    # in an attempt to derive the values. That won't work in this case since we need
+    # to know them in order to call jnp.full
+
+    default_dtype = jnp.float32
+
+    def compute_dtype(self):
+        # We're doing this instead of just self.value.dtype since we might get
+        # a python scalar
+        return jax.core.get_aval(self.value).dtype
 
     # The way we can guarantee that our ImplicitArrays will work
     # with pre-existing code is that whenever we hit an op
@@ -23,31 +45,6 @@ class ImplicitConst(ImplicitArray):
     # dense array and the default behavior will be used
     def materialize(self):
         return jnp.full(self.shape, self.value, dtype=self.dtype)
-
-    # ImplicitArray subclasses automatically get registered as pytrees
-    # so they need to define flattening and unflattening behavior
-    # This allows them to be easily used with other transforms
-    # such as jax.grad
-    def flatten(self):
-        """
-        Should return:
-            - an iterable of (name, child) tuples
-            - Any auxiliary data (shape and dtype are handled by the base class we 
-        """
-        return [('value', self.value)], ()
-
-    def unflatten(self, aux_data, children):
-        """
-        This will be called on an _uninitialized_ instance of ImplicitConst.
-        This is because things like `tree_map` use unflatten but not __init__, and we 
-        want to be able to be able to produce ImplicitConst's with invalid internal data
-        via tree_map if necessary.
-        """
-        self.value, = children
-
-
-    def __str__(self):
-        return f'ImplicitConst({self.value}, {self.shape})'
 
 # The way we define custom behavior is by writing a function
 # and decorating it with the primitive_handler decorator
@@ -71,7 +68,7 @@ def mul(primitive, a: ImplicitConst, b: jax.Array):
         # If we get multiplied by a scalar, we can 
         # output another ImplicitConst instance
         # rather than materializing the dense array
-        return ImplicitConst(a.value * b.reshape(1)[0], out_shape)
+        return ImplicitConst(a.value * b.reshape(1)[0], shape=out_shape)
 
     # In the general case we just multiply our constant value by the other array
     result = b * a.value
@@ -81,7 +78,7 @@ def mul(primitive, a: ImplicitConst, b: jax.Array):
 @primitive_handler('mul')
 def mul(primitive, a: ImplicitConst, b: ImplicitConst):
     out_shape = jnp.broadcast_shapes(a.shape, b.shape)
-    return ImplicitConst(a.value * b.value, out_shape)
+    return ImplicitConst(a.value * b.value, shape=out_shape)
 
 # You can use one handler for multiple primitives by passing an iterable to the decorator
 @primitive_handler(['sin', 'cos', 'exp'])
@@ -90,7 +87,7 @@ def elementwise_unop(primitive, arg : ImplicitConst):
     # to do with the exact primitive being used so 
     # we can just use qax.default_handler to execute
     result = default_handler(primitive, arg.value)
-    return ImplicitConst(result, arg.shape)
+    return ImplicitConst(result, shape=arg.shape)
 
 # If the primitive has any params (such as reduction axes) the handler will receive
 # them as a param kwarg
@@ -102,7 +99,7 @@ def elementwise_unop(primitive, arg : ImplicitConst):
 def reduce_sum(primitive, a: ImplicitConst, *, axes):
     sum_result = np.prod([a.shape[i] for i in axes]) * a.value
     new_shape = tuple(d for d in a.shape if d not in axes)
-    return ImplicitConst(sum_result, new_shape)
+    return ImplicitConst(sum_result, shape=new_shape)
 
 
 # This decorator makes it so that `f` can handle inputs which are instances
@@ -118,10 +115,10 @@ def main():
     shape = (5, 7)
 
     a_full = jnp.full(shape, 3.)
-    a_implicit = ImplicitConst(3., shape)
+    a_implicit = ImplicitConst(3., shape=shape)
 
     b_full = jnp.full(shape, 2.)
-    b_implicit = ImplicitConst(2., shape)
+    b_implicit = ImplicitConst(2., shape=shape)
 
     result = f(a_full, b_full)
 
@@ -138,7 +135,7 @@ def main():
 
     # We can also nest ImplicitArray instances (even if they're different subclasses)
     nested_b = ImplicitConst(
-        value=ImplicitConst(2., ()),
+        value=ImplicitConst(2., shape=()),
         shape=shape
     )
 

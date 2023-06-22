@@ -1,48 +1,33 @@
+from dataclasses import dataclass
 import warnings
 
 import jax
 import jax.numpy as jnp
 
-from qax import ImplicitArray, use_implicit_args, primitive_handler
+from qax import ArrayValue, ImplicitArray, use_implicit_args, primitive_handler
 
+@dataclass
 class Outer(ImplicitArray):
-    def __init__(self, x):
-        super().__init__(x.shape, x.dtype)
-        self.x = x
+    x : ArrayValue
 
-    def flatten(self):
-        return [('x', self.x)], None
-
-    def unflatten(self, aux_data, children):
-        self.x, = children
-
-    @classmethod
-    def materialize(cls, outer):
-        return 2 * (outer.x ** 1)
+    def materialize(self):
+        return 2 * (self.x ** 1)
 
 @primitive_handler(jax.lax.mul_p)
 def mul(primitive, arg : Outer, other : jax.Array):
     return Outer(arg.x * other)
 
+@dataclass
 class Inner(ImplicitArray):
-    def __init__(self, value, shape, dtype):
-        super().__init__(shape, dtype)
-        self.value = value
+    value : ArrayValue
 
-    @classmethod
-    def materialize(cls, inner):
-        return jnp.full(inner.shape, inner.value, dtype=inner.dtype)
-
-    def flatten(self):
-        return [('value', self.value)], None
-
-    def unflatten(self, aux_data, children):
-        self.value, = children
+    def materialize(self):
+        return jnp.full(self.shape, self.value, dtype=self.dtype)
 
 @primitive_handler(jax.lax.integer_pow_p)
 def pow(primitive, arg : Inner, *, y):
     new_value = arg.value ** y
-    return Inner(new_value, arg.shape, arg.dtype)
+    return Inner(new_value, shape=arg.shape, dtype=arg.dtype)
 
 def test_nested():
     @use_implicit_args

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 from jax.tree_util import tree_structure
@@ -5,28 +6,15 @@ import pytest
 
 import optax
 
-from qax import utils, ImplicitArray
+from qax import ArrayValue, utils, ImplicitArray
 
+@dataclass
 class Container(ImplicitArray):
-    def __init__(self, a, b):
-        super().__init__(a.shape, a.dtype)
-        self.a = a
-        self.b = b
-
-    def flatten(self):
-        return [('a', self.a), ('b', self.b)], ()
-
-    def unflatten(self, aux_data, children):
-        self.a, self.b = children
+    a : ArrayValue
+    b : ArrayValue
 
     def materialize(self):
         return self.a
-
-    def __str__(self):
-        return f'Container(a={self.a}, b={self.b})'
-
-    def __repr__(self):
-        return str(self)
 
 @pytest.fixture(scope='module', params=[0, 1, 2, 3])
 def container_with_depth(request):

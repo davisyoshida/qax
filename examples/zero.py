@@ -5,29 +5,32 @@ import jax.numpy as jnp
 from qax import ImplicitArray, primitive_handler, use_implicit_args
 
 class ImplicitZeros(ImplicitArray):
+    default_dtype = jnp.float32
+
     def materialize(self):
         return jnp.zeros(self.shape, dtype=self.dtype)
 
-def get_binop_out_aval(x, y):
-    shape = jnp.broadcast_shapes(x.shape, y.shape)
-    dtype = jnp.result_type(x.dtype, y.dtype)
-    return shape, dtype
+def binop_shape_dtype(x, y):
+    return {
+        'shape': jnp.broadcast_shapes(x.shape, y.shape),
+        'dtype': jnp.result_type(x.dtype, y.dtype),
+    }
 
 @primitive_handler(jax.lax.mul_p)
 def do_mul(primitive, x : ImplicitZeros, y : jax.Array):
     print('Invoked do_mul')
-    return ImplicitZeros(*get_binop_out_aval(x, y))
+    return ImplicitZeros(**binop_shape_dtype(x, y))
 
 @primitive_handler([jax.lax.add_p, jax.lax.mul_p])
 def handle_both_implicit(primitive, x : ImplicitZeros, y : ImplicitZeros):
     print('Invoked handle_both_implicit')
-    return ImplicitZeros(*get_binop_out_aval(x, y))
+    return ImplicitZeros(**binop_shape_dtype(x, y))
 
 @primitive_handler(jax.lax.add_p)
 def handle_add_general(primitive, x : ImplicitZeros, y : jax.Array):
     print('Invoked handle_add')
-    out_shape, out_dtype = get_binop_out_aval(x, y)
-    return jnp.broadcast_to(y, out_shape).astype(out_dtype)
+    shape_dtype = binop_shape_dtype(x, y)
+    return jnp.broadcast_to(y, shape_dtype['shape']).astype(shape_dtype['dtype'])
 
 def main():
     @jax.jit
@@ -43,7 +46,7 @@ def main():
         b =  w + a               # b: jax.Array      output: Invoked handle_add
         return b
 
-    zeros = ImplicitZeros((2, 3), dtype=jnp.float32)
+    zeros = ImplicitZeros(shape=(2, 3))
 
     result = jax.jit(f)(zeros, zeros)
 
@@ -56,8 +59,6 @@ def main():
     f(zeros, jnp_ones)
     f(jnp_ones, zeros)
     f(jnp_ones, jnp_ones)
-
-
 
 if __name__ == '__main__':
     main()

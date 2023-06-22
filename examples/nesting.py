@@ -12,7 +12,7 @@ def f(x, y):
 
 shape = (2, 3)
 x = NullableArray(
-    val=ImplicitZeros(shape, jnp.float32),
+    val=ImplicitZeros(shape=shape),
     mask=jnp.asarray(
         [[True, False, True],
          [False, True, True]],

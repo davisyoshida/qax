@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field, fields, is_dataclass
 from functools import partial, wraps
 from itertools import chain
+from typing import ClassVar, Optional
 import warnings
 
 import jax
@@ -9,9 +13,12 @@ from jax import core
 import jax.linear_util as lu
 import jax.interpreters.partial_eval as pe
 from jax.tree_util import register_pytree_with_keys_class
+import jax.numpy as jnp
+
+from jax._src.typing import DTypeLike, Shape
 
 from . import constants
-from .primitives import ArrayValue, default_handler, get_primitive_handler
+from .primitives import ArrayValue, get_primitive_handler
 from . import utils
 
 def _use_implicit_flat(f_flat):
@@ -27,6 +34,11 @@ def _use_implicit_flat(f_flat):
     return inner
 
 def use_implicit_args(f):
+    """
+    Decorator which allows a function to accept arguments which subclass ImplicitArray, possibly
+    including further ImplicitArray instances as children.
+    Any number of arguments (including 0) may be ImplicitArrays.
+    """
     @wraps(f)
     def inner(*args, **kwargs):
         flat_args, in_tree = utils.tree_flatten_with_implicit((args, kwargs))
@@ -35,28 +47,130 @@ def use_implicit_args(f):
         return jax.tree_util.tree_unflatten(out_tree(), outs_flat)
     return inner
 
-class ImplicitArray(ArrayValue):
-    commute_ops = True
+def aux_field(metadata=None, **kwargs):
+    metadata = dict(metadata) if metadata else {}
+    metadata['implicit_array_aux'] = True
+    return field(metadata=metadata, **kwargs)
 
-    def __init__(self, shape, dtype):
-        self._shape = shape
-        self._dtype = dtype
+class UninitializedAval(Exception):
+    def __init__(self, kind):
+        super().__init__(_AVAL_ERROR_MESSAGE.format(kind))
 
-    @property
-    def shape(self):
-        return self._shape
+# This descriptor and the below context manager support discovering the aval
+# of an ImplicitArray. We don't want to throw an error just because a shape
+# wasn't passed, since it may be possible to infer it via materialization
+class _AvalDescriptor:
+    def __set_name__(self, owner, name):
+        self._name = f'_{name}'
 
-    @shape.setter
-    def shape(self, new_shape):
-        self._shape = new_shape
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return None
+        result = getattr(obj, self._name, None)
+        if result is None:
+            raise UninitializedAval(kind=self._name[1:])
+        return result
 
-    @property
-    def dtype(self):
-        return self._dtype
+    def __set__(self, obj, value):
+        setattr(obj, self._name, value)
 
-    @dtype.setter
-    def dtype(self, new_dtype):
-        self._dtype = new_dtype
+# Context manager used for disabling UninitializedAval errors
+# during tree flattening only
+_aval_discovery = ContextVar('aval_discovery', default=False)
+@contextmanager
+def _aval_discovery_context():
+    token = _aval_discovery.set(True)
+    try:
+        yield
+    finally:
+        _aval_discovery.reset(token)
+
+@dataclass
+class _ImplicitArrayBase(ArrayValue,ABC):
+    commute_ops : ClassVar[bool] = True
+    default_shape : ClassVar[Optional[Shape]] = None
+    default_dtype : ClassVar[Optional[DTypeLike]] = None
+
+    shape : Optional[Shape] = aux_field(kw_only=True, default=None)
+    dtype : DTypeLike = aux_field(kw_only=True, default=None)
+
+@dataclass
+class ImplicitArray(_ImplicitArrayBase):
+    """
+    Abstract class for representing an abstract array of a given shape/dtype without actually instantiating it.
+    Subclasses must implement the materialize method, which defines the relationship between the implicit array
+    and the value it represents. Subclasses are valid arguments to functions decorated with qax.use_implicit_args.
+
+    All subclasses are automatically registered as pytrees using jax.tree_util.register_pytree_with_keys_class.
+    Any dataclass attributes added will be included as children, unless they are decorated with qax.aux_field
+    in which case they are passed as auxiliary data during flattening.
+
+    The represented shape and dtype may be defined in any of the following ways:
+        - Explicitly passing shape/dtype keyword arguments at initialization
+        - Overriding the default_shape/default_dtype class variables
+        - Overriding the compute_shape/compute_dtype methods, which are called during __post_init__
+        - Overriding __post_init__ and manually setting shape/dtype before calling super().__post_init__
+        - None of the above, in which case an shape/dtype will be inferred by by running jax.eval_shape()
+          on the subclass's materialize method.
+    """
+
+    shape = _AvalDescriptor()
+    dtype = _AvalDescriptor()
+
+    def __post_init__(self):
+        try:
+            aval = _get_materialization_aval(self)
+        except UninitializedAval:
+            # Materialization depends on currently uninitialized shape/dtype
+            aval = None
+
+        shape = None
+        try:
+            shape = self.shape
+        except UninitializedAval as e:
+            shape = self.shape = self.compute_shape()
+
+        if aval is not None:
+            if shape is None:
+                self.shape = aval.shape
+            elif shape != aval.shape:
+                warnings.warn(f'ImplicitArray shape {shape} does not match materialization shape {aval.shape}')
+        elif shape is None:
+            raise UninitializedAval('shape')
+
+        dtype = None
+        try:
+            dtype = self.dtype
+        except UninitializedAval as e:
+            dtype = self.dtype = self.compute_dtype()
+
+        if dtype is None and aval is None:
+            # We have a shape but not a dtype, try once again to infer the dtype
+            aval = _get_materialization_aval(self)
+
+        if aval is not None:
+            if dtype is None:
+                self.dtype = aval.dtype
+            elif dtype != aval.dtype:
+                warnings.warn(f'ImplicitArray dtype {dtype} does not match materialization dtype {aval.dtype}')
+        elif dtype is None:
+            raise UninitializedAval('dtype')
+
+
+
+    def compute_shape(self):
+        """
+        Override this method if the subclass instance's shape should be computed based on its other properties.
+        Returns: shape
+        """
+        return self.default_shape
+
+    def compute_dtype(self):
+        """
+        Override this method if the subclass instance's dtype should be computed based on its other properties.
+        Returns: dtype
+        """
+        return self.default_dtype
 
     @property
     def aval(self):
@@ -68,44 +182,36 @@ class ImplicitArray(ArrayValue):
             params = {}
         return materialize_handler(primitive, *args, params=params)
 
-    def _materialize(self):
-        wrapped = lu.wrap_init(type(self).materialize)
-        flat, in_tree = utils.flatten_one_implicit_layer((self,))
-        flat_fn, out_tree = flatten_fun_nokwargs(wrapped, in_tree)
-        out_flat = use_implicit_args(flat_fn.call_wrapped)(*flat)
-        result = jax.tree_util.tree_unflatten(out_tree(), out_flat)
-        return result
-
     @abstractmethod
     def materialize(self):
         pass
 
-    def flatten(self):
-        """
-        To control tree flattening, override this method rather than `tree_flatten`.
-        The auxiliary data returned will have the shape and dtype added to it.
-        """
-        return [], ()
-
-    def unflatten(self, aux_data, children):
-        """
-        To control unflattening override this method rather than `tree_unflatten`.
-        This will avoid __init__ being called during tree unflattening.
-        """
-        pass
-
     def tree_flatten_with_keys(self):
-        children, aux_data = self.flatten()
-        aux_data = (self.shape, self.dtype, aux_data)
+        children = []
+        aux_data = []
+        for name, is_aux in _get_names_and_aux(self):
+            try:
+                value = getattr(self, name)
+            except UninitializedAval:
+                if not _aval_discovery.get():
+                    raise
+                value = None
+            if is_aux:
+                aux_data.append(value)
+            else:
+                children.append((name, value))
+
         return children, aux_data
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        obj = object.__new__(cls)
-        shape, dtype, aux_data = aux_data
-        obj.shape = shape
-        obj.dtype = dtype
-        obj.unflatten(aux_data, children)
+        child_it = iter(children)
+        aux_it = iter(aux_data)
+        obj = cls.__new__(cls)
+        for name, is_aux in _get_names_and_aux(cls):
+            value = next(aux_it if is_aux else child_it)
+            setattr(obj, name, value)
+
         return obj
 
     def handle_primitive(self, primitive, *args, params):
@@ -125,23 +231,18 @@ class ImplicitArray(ArrayValue):
     def __init_subclass__(cls, commute_ops=True, **kwargs):
         super().__init_subclass__(**kwargs)
 
-        if 'tree_unflatten' in cls.__dict__:
-            raise TypeError(
-                'In order to define an ImplicitArray\'s unflattening behavior,'
-                ' define the `unflatten` method instead of `tree_unflatten`.'
-            )
-
-        if 'tree_flatten_with_keys' in cls.__dict__:
-            raise TypeError(
-                'In order to define an ImplicitArray\'s flattening behavior,'
-                ' define the `flatten` method instead of `tree_flatten_with_keys`.'
-            )
-
+        if not is_dataclass(cls):
+            raise TypeError(f'{cls.__name__} must be a dataclass')
         core.pytype_aval_mappings[cls] = lambda x: x.aval
         register_pytree_with_keys_class(cls)
+        return cls
+
+def _get_names_and_aux(obj):
+    for val in fields(obj):
+        yield val.name, bool(val.metadata.get('implicit_array_aux'))
 
 def _materialize_all(it):
-    return [val._materialize() if isinstance(val, ImplicitArray) else val for val in it]
+    return [utils.materialize_nested(val) if isinstance(val, ImplicitArray) else val for val in it]
 
 def _maybe_swap_args(op_name, args, params):
     if isinstance(args[0], ImplicitArray):
@@ -303,3 +404,21 @@ def _broadcast_tuple(t, trees):
         (tuple_val for _ in jax.tree_util.tree_leaves(tree))
         for tuple_val, tree in zip(t, trees)
     ))
+
+def _get_materialization_aval(imp_arr):
+    with _aval_discovery_context():
+        result = jax.eval_shape(
+            partial(utils.materialize_nested, full=True),
+            imp_arr
+        )
+    return result
+
+_AVAL_ERROR_MESSAGE = (
+    '{} was not set during initialization. Shape and dtype may be set by:'
+    '\n\t1. Directly passing them as keyword arguments to ImplicitArray instances'
+    '\n\t2. Overriding the default_shape/default_dtype class attributes'
+    '\n\t3. Overriding the compute_shape/compute_dtype methods'
+    '\n\t4. Overriding __post_init__ and setting their values there'
+    '\n\t5. None of the above, in which case `materialize()` will be called in an attempt to infer them.'
+    ' If their values are required in order to compute the materialization this will be unsuccessful.'
+)
