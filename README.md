@@ -1,4 +1,4 @@
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/davisyoshida/qax/blob/master/examples/How_To_Qax.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/davisyoshida/qax/blob/master/examples/How_to_Qax.ipynb)
 # Qax: If it quacks like a tensor...
 [Qax](https://github.com/davisyoshida/qax) is a tool for implementing types which represent tensors, but aren't actually instantiated as a single dense array on your GPU. Examples of this include:
 * Quantization: A 4-bit array of integers + a small number of scale values are used to represent a full 16/32-bit array
