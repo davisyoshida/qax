@@ -17,21 +17,33 @@ import jax.numpy as jnp
 
 from jax._src.typing import DTypeLike, Shape
 
-from . import constants
-from .primitives import ArrayValue, get_primitive_handler
-from . import utils
+from .. import constants
+from ..primitives import ArrayValue, get_primitive_handler
 
-def _use_implicit_flat(f_flat):
-    @wraps(f_flat)
-    def inner(*flat_args):
-        with core.new_main(ImplicitArrayTrace) as main:
-            trace = main.with_cur_sublevel()
-            tracers_in = [ImplicitArrayTracer(trace, val) if isinstance(val, ImplicitArray) else val for val in flat_args]
+from . import implicit_utils as iu
 
-            results = f_flat.call_wrapped(*tracers_in)
-            tracers_out = [trace.full_raise(t).value for t in results]
-        return tracers_out
-    return inner
+def _with_implicit_flat(fun: lu.WrappedFun) -> lu.WrappedFun:
+  # Splitting to avoid leaks based on https://github.com/google/jax/blob/0dffdf4645db7bf7a9fadd4bcfe9ec0368a8ecb9/jax/_src/interpreters/batching.py#L539
+    f = _implicit_inner(fun)
+    return _implicit_outer(f)
+
+@lu.transformation
+def _implicit_outer(*in_vals):
+    with core.new_main(ImplicitArrayTrace) as main:
+        outs = yield (main, *in_vals), {}
+        del main
+    yield outs
+
+@lu.transformation
+def _implicit_inner(main, *in_vals):
+    trace = main.with_cur_sublevel()
+    in_tracers = [
+        ImplicitArrayTracer(trace, val) if isinstance(val, ImplicitArray) else val
+        for val in in_vals
+    ]
+    outs = yield in_tracers, {}
+    out_vals = [trace.full_raise(t).value for t in outs]
+    yield out_vals
 
 def use_implicit_args(f):
     """
@@ -40,12 +52,14 @@ def use_implicit_args(f):
     Any number of arguments (including 0) may be ImplicitArrays.
     """
     @wraps(f)
-    def inner(*args, **kwargs):
-        flat_args, in_tree = utils.tree_flatten_with_implicit((args, kwargs))
+    def implicit_f(*args, **kwargs):
+        flat_args, in_tree = iu.tree_flatten_with_implicit((args, kwargs))
         f_flat, out_tree = flatten_fun(lu.wrap_init(f), in_tree)
-        outs_flat = _use_implicit_flat(f_flat)(*flat_args)
-        return jax.tree_util.tree_unflatten(out_tree(), outs_flat)
-    return inner
+        f_wrapped = _with_implicit_flat(f_flat)
+        outs_flat = f_wrapped.call_wrapped(*flat_args)
+        return out_tree().unflatten(outs_flat)
+
+    return implicit_f
 
 def aux_field(metadata=None, **kwargs):
     metadata = dict(metadata) if metadata else {}
@@ -222,7 +236,7 @@ class ImplicitArray(_ImplicitArrayBase):
             args, use_params = _maybe_swap_args(primitive.name, args, use_params)
 
         #maybe_kwargs = {'params': params} if params else {}
-        flat_args, in_tree = utils.flatten_one_implicit_layer((args, params))
+        flat_args, in_tree = iu.flatten_one_implicit_layer((args, params))
         flat_handler, out_tree = flatten_fun(handler, in_tree)
 
         result = use_implicit_args(flat_handler.call_wrapped)(*flat_args)
@@ -242,7 +256,7 @@ def _get_names_and_aux(obj):
         yield val.name, bool(val.metadata.get('implicit_array_aux'))
 
 def _materialize_all(it):
-    return [utils.materialize_nested(val) if isinstance(val, ImplicitArray) else val for val in it]
+    return [iu.materialize_nested(val) if isinstance(val, ImplicitArray) else val for val in it]
 
 def _maybe_swap_args(op_name, args, params):
     if isinstance(args[0], ImplicitArray):
@@ -341,7 +355,7 @@ def _match_branches(branches, arg_vals):
             )
         )
 
-    out_transforms = utils.get_common_prefix_transforms(out_avals)
+    out_transforms = iu.get_common_prefix_transforms(out_avals)
     new_branches = []
     out_struct = None
     for (new_jaxpr, orig_out_struct), transform in zip(new_jaxprs, out_transforms):
@@ -408,7 +422,7 @@ def _broadcast_tuple(t, trees):
 def _get_materialization_aval(imp_arr):
     with _aval_discovery_context(), _filter_materialization_warnings():
         result = jax.eval_shape(
-            partial(utils.materialize_nested, full=True),
+            partial(iu.materialize_nested, full=True),
             imp_arr
         )
     return result

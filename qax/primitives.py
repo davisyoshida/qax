@@ -18,6 +18,8 @@ def get_lax_primitive_by_name(name):
     return getattr(jax.lax, f'{name}_p')
 
 def get_primitive_handler(primitive):
+    if isinstance(primitive, str):
+        primitive = get_lax_primitive_by_name(primitive)
     handler = _dispatch.functions.get(primitive)
     if handler is None:
         def _not_impl_handler(primitive : jax.core.Primitive, *args, **kwargs):
@@ -34,11 +36,8 @@ def primitive_handler(primitives, precedence=0):
         primitives = [primitives]
     def decorator(fn):
         for primitive in primitives:
-            if isinstance(primitive, str):
-                primitive = get_lax_primitive_by_name(primitive)
             handler = get_primitive_handler(primitive)
             handler.register(fn, precedence=precedence)
-
     return decorator
 
 def default_handler(primitive, *args, **params):

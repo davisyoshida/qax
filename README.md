@@ -1,4 +1,5 @@
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/davisyoshida/qax/blob/master/examples/How_to_Qax.ipynb)
+
 # Qax: If it quacks like a tensor...
 [Qax](https://github.com/davisyoshida/qax) is a tool for implementing types which represent tensors, but aren't actually instantiated as a single dense array on your GPU. Examples of this include:
 * Quantization: A 4-bit array of integers + a small number of scale values are used to represent a full 16/32-bit array
@@ -25,7 +26,6 @@ The way you specify custom behavior with Qax is to subclass the `qax.ImplicitArr
 
 
 ```python
-import qax
 class Zeros(qax.ImplicitArray):
     default_dtype = jnp.float32
 
@@ -66,7 +66,7 @@ with warnings.catch_warnings():
     print(f(z, jnp.ones(3)))
 ```
 
-    qax/implicit_array.py:289: UserWarning: Primitive add was not handled by class Zeros, so implicit args will be materialized.
+    /home/davis/src/qax/qax/implicit/implicit_array.py:303: UserWarning: Primitive add was not handled by class Zeros, so implicit args will be materialized.
       warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
 
 
@@ -352,14 +352,14 @@ The LoRA result is identical to the execution of the unmodified network, and we 
 ## Training
 So far we haven't looked at how to train a model when using Qax. The main thing to understand is that you should apply `qax.use_implicit_args` first, _then_ differentiate the resulting function. `use_implicit_args` transforms the function into one which goes from pytrees to pytrees, so all the standard JAX autodiff machinery will work.
 
-If you need to update only a subset of the elements of an ImplicitArray instance (e.g. only `a` and `b` for LoRA), Qax provides `qax.utils.freeze_qax_keys` to make this easier. Here's an end-to-end example training T5 to memorize the input/output pair from above:
+If you need to update only a subset of the elements of an ImplicitArray instance (e.g. only `a` and `b` for LoRA), Qax provides `qax.utils.freeze_keys` to make this easier. Here's an end-to-end example training T5 to memorize the input/output pair from above:
 
 
 ```python
 optimizer = optax.adam(3e-4)
 # freeze_keys_in_optimizer takes an optax optimizer, the ImplicitArray subclass to freeze for,
 # and an iterable of the keys to be frozen
-optimizer = qax.utils.freeze_qax_keys(optimizer, LoraMatrix, ['w'])
+optimizer = qax.utils.freeze_keys(optimizer, LoraMatrix, ['w'])
 
 # We're only using a single example so we'll just close over the training data
 # There are no code changes from an ordinary training loop other than decorating
@@ -446,17 +446,13 @@ with warnings.catch_warnings():
     With lora: 15.0
 
 
-    qax/implicit_array.py:289: UserWarning: Primitive transpose was not handled by class Zeros, so implicit args will be materialized.
+    UserWarning: Primitive dot_general was not handled by class Zeros, so implicit args will be materialized.
       warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
-    qax/implicit_array.py:289: UserWarning: Primitive dot_general was not handled by class Zeros, so implicit args will be materialized.
-      warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
-    qax/implicit_array.py:289: UserWarning: Primitive dot_general was not handled by class Zeros, so implicit args will be materialized.
-      warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
-    qax/implicit_array.py:289: UserWarning: Primitive transpose was not handled by class Zeros, so implicit args will be materialized.
+    UserWarning: Primitive transpose was not handled by class Zeros, so implicit args will be materialized.
       warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
 
 
 If we wanted we could write a `dot_general` handler to avoid the materialization as well, but the main point is just to illustrate that it's easy to mix and match different `ImplicitArray` subclasses. A more useful example might be using a symbolic zero as the offset for a quantization datatypes which expects both an offset and a scale.
 
 ## Other examples
-[Here's](https://github.com/davisyoshida/abnormal-floats/blob/8421c0b4677c5cd8e527ae999b00ee4a629c3318/transform.py#L17) an example of using Qax to implement a 4-bit quantized matrix representation.
+[Here's](https://github.com/davisyoshida/abnormal-floats/blob/master/transform.py) an example of using Qax to implement a 4-bit quantized matrix representation.

@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from qax import ImplicitArray, use_implicit_args, primitive_handler
+from qax import utils
 
 WARN_PATTERN = '.*implicit args will be materialized'
 
