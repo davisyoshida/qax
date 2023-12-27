@@ -102,6 +102,7 @@ def _aval_discovery_context():
 @dataclass
 class _ImplicitArrayBase(ArrayValue,ABC):
     commute_ops : ClassVar[bool] = True
+    warn_on_materialize : ClassVar[bool] = True
     default_shape : ClassVar[Optional[Shape]] = None
     default_dtype : ClassVar[Optional[DTypeLike]] = None
 
@@ -169,8 +170,6 @@ class ImplicitArray(_ImplicitArrayBase):
                 warnings.warn(f'ImplicitArray dtype {dtype} does not match materialization dtype {aval.dtype}')
         elif dtype is None:
             raise UninitializedAval('dtype')
-
-
 
     def compute_shape(self):
         """
@@ -242,8 +241,10 @@ class ImplicitArray(_ImplicitArrayBase):
         result = use_implicit_args(flat_handler.call_wrapped)(*flat_args)
         return jax.tree_util.tree_unflatten(out_tree(), result)
 
-    def __init_subclass__(cls, commute_ops=True, **kwargs):
+    def __init_subclass__(cls, commute_ops=True, warn_on_materialize=True, **kwargs):
         super().__init_subclass__(**kwargs)
+        cls.commute_ops = commute_ops
+        cls.warn_on_materialize = warn_on_materialize
 
         if not is_dataclass(cls):
             raise TypeError(f'{cls.__name__} must be a dataclass')
@@ -300,7 +301,9 @@ class ImplicitArrayTrace(core.Trace):
             if primitive.name in _default_handlers:
                 outs = _default_handlers[primitive.name](primitive, *vals, params=params)
             else:
-                warnings.warn(f'Primitive {primitive.name} was not handled by class {vals[implicit_idx].__class__.__name__}, so implicit args will be materialized.')
+                implicit_cls = vals[implicit_idx].__class__
+                if implicit_cls.warn_on_materialize:
+                    warnings.warn(f'Primitive {primitive.name} was not handled by class {implicit_cls.__name__}, so implicit args will be materialized.')
 
         if outs is NotImplemented:
             outs = vals[implicit_idx].default_handler(primitive, *vals, params=params)

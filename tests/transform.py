@@ -73,6 +73,15 @@ def test_materialize(const):
     with pytest.warns(UserWarning, match=WARN_PATTERN):
         use_implicit_args(f)(const)
 
+def test_suppress_materialize_warning():
+    class NoMaterializeWarning(ImplicitConst, warn_on_materialize=False):
+        pass
+    def f(x):
+        return 3 + x
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings('error', message=WARN_PATTERN)
+        use_implicit_args(f)(NoMaterializeWarning(2, -173, shape=()))
 
 def test_cond(const):
     @use_implicit_args
@@ -165,3 +174,17 @@ def test_vmap():
     expected_result = vmapped_f(x_value, ys)
 
     assert jnp.allclose(result, expected_result)
+
+def test_disable_commute():
+    class NoCommute(ImplicitArray, commute_ops=False):
+        def materialize(self):
+            return jnp.zeros(self.shape)
+
+    @primitive_handler('add')
+    def add(primitive: Primitive, x: NoCommute, y: Any):
+        return y
+
+    with pytest.warns(UserWarning, match=WARN_PATTERN):
+        use_implicit_args(lambda x: 1 + x)(NoCommute(shape=()))
+
+
