@@ -401,10 +401,54 @@ def _handle_pjit(primitive, *vals, params):
     outs = primitive.bind(*subfuns, *flat_inputs, **bind_params)
     return jax.tree_util.tree_unflatten(out_tree, outs)
 
+def _handle_scan(primitive, *vals, params):
+    n_carry = params['num_carry']
+    carries = vals[:n_carry]
+    xs = vals[n_carry:]
+
+    if any(isinstance(c, ImplicitArray) for c in carries):
+        warnings.warn(
+            'ImplicitArray in scan carries are not yet supported.'
+            ' If you need this feature please open an issue on the Qax repo:'
+            ' https://github.com/davisyoshida/qax/issues'
+        )
+        carries = _materialize_all(carries)
+
+    sliced_xs = jax.tree_map(
+            partial(jax.eval_shape, lambda x: x[0]),
+            xs
+    )
+
+    for x in sliced_xs:
+        if isinstance(x, ImplicitArray):
+            assert len(x._shape) > 0, 'Attempted to scan over a scalar.'
+            x._shape = x._shape[1:]
+
+
+    jaxpr = params['jaxpr']
+    new_jaxpr, _, out_tree = wrap_jaxpr(
+        jaxpr=jaxpr,
+        vals_with_implicits=(*carries, *sliced_xs),
+        return_closed=True
+    )
+
+    flat_inputs = jax.tree_util.tree_leaves(
+        (jaxpr.literals, *carries, *xs)
+    )
+
+    subfuns, bind_params = primitive.get_bind_params(params)
+    bind_params['jaxpr'] = new_jaxpr
+    bind_params['num_carry'] = len(carries)
+    bind_params['linear'] = (False,) * len(flat_inputs)
+
+    outs = primitive.bind(*subfuns, *flat_inputs, **bind_params)
+    return jax.tree_util.tree_unflatten(out_tree, outs)
+
 _default_handlers = {
     'cond': _handle_cond,
     'remat2': _handle_remat2,
     'pjit': _handle_pjit,
+    'scan': _handle_scan,
 }
 
 def materialize_handler(primitive, *vals, params):
