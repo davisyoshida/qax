@@ -43,6 +43,11 @@ def test_add(zeros, arr, pis):
     assert isinstance(pi_plus_pi, SymbolicConstant)
     assert jnp.isclose(pi_plus_pi.value, 2 * jnp.pi)
 
+    pi_plus_arr = add(pis, arr)
+    assert isinstance(pi_plus_arr, jnp.ndarray)
+    assert jnp.allclose(pi_plus_arr, arr + jnp.pi)
+
+
 def test_mul(zeros, ones, arr, pis):
     zero_times_one = mul(zeros, ones)
 

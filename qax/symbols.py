@@ -103,7 +103,7 @@ def _op_and_reshape(primitive, lhs, rhs, flip=False):
         lhs, rhs = (rhs, lhs)
     @use_implicit_args
     def inner(arg):
-        other = rhs
+        other = lhs
         if flip:
             arg, other = (other, arg)
 
@@ -127,6 +127,7 @@ def special_case_binop(name, identity=None, annihilator=None, flip=False):
             if lhs.value == annihilator:
                 return SymbolicConstant(lhs.value, shape=out_shape, dtype=out_dtype)
 
+            print(f'{primitive} {lhs.value} {rhs}')
             return _op_and_reshape(primitive, lhs.value, rhs)
 
 special_case_binop('add', identity=0)
