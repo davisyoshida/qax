@@ -4,7 +4,7 @@ from itertools import chain
 import jax
 from jax.api_util import flatten_fun_nokwargs
 from jax import core
-import jax.linear_util as lu
+import jax.extend.linear_util as lu
 from jax import tree_util
 
 from . import implicit_array as ia
