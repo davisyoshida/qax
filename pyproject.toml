@@ -1,6 +1,6 @@
 [tool.poetry]
 name = 'qax'
-version = '0.3.0'
+version = '0.3.1'
 description = 'A JAX transform for writing things which pretend to be tensors'
 authors = ['Davis Yoshida <dyoshida@ttic.edu>']
 license = 'MIT'
@@ -11,8 +11,8 @@ packages = [
 
 [tool.poetry.dependencies]
 python = '^3.10'
-jax = '^0.4.10'
-jaxlib = '^0.4.10'
+jax = '^0.4.24'
+jaxlib = '^0.4.24'
 plum-dispatch = '^2.1.0'
 optax = '^0.1.5'
 
