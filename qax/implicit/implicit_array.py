@@ -373,7 +373,7 @@ def _handle_cond(primitive, *vals, params):
 
     new_branches, out_struct, flat_inputs = _match_branches(params['branches'], arg_vals)
     bind_params['branches'] = new_branches
-    bind_params['linear'] = _broadcast_tuple(params['linear'], arg_vals)
+    bind_params['linear'] = _broadcast_tuple(bind_params['linear'], arg_vals)
 
     outs = primitive.bind(*subfuns, cond_val, *flat_inputs, **bind_params)
     return jax.tree_util.tree_unflatten(out_struct, outs)
@@ -402,9 +402,14 @@ def _handle_pjit(primitive, *vals, params):
     return jax.tree_util.tree_unflatten(out_tree, outs)
 
 def _handle_scan(primitive, *vals, params):
+    n_consts = params['num_consts']
     n_carry = params['num_carry']
-    carries = vals[:n_carry]
-    xs = vals[n_carry:]
+
+    consts = vals[:n_consts]
+    real_n_consts = len(jax.tree_util.tree_leaves(consts))
+
+    carries = vals[n_consts:n_consts + n_carry]
+    xs = vals[n_consts + n_carry:]
 
     if any(isinstance(c, ImplicitArray) for c in carries):
         warnings.warn(
@@ -428,18 +433,19 @@ def _handle_scan(primitive, *vals, params):
     jaxpr = params['jaxpr']
     new_jaxpr, _, out_tree = wrap_jaxpr(
         jaxpr=jaxpr,
-        vals_with_implicits=(*carries, *sliced_xs),
+        vals_with_implicits=(*consts, *carries, *sliced_xs),
         return_closed=True
     )
 
     flat_inputs = jax.tree_util.tree_leaves(
-        (jaxpr.literals, *carries, *xs)
+        (jaxpr.literals, *consts, *carries, *xs)
     )
 
     subfuns, bind_params = primitive.get_bind_params(params)
     bind_params['jaxpr'] = new_jaxpr
+    bind_params['num_consts'] = real_n_consts
     bind_params['num_carry'] = len(carries)
-    bind_params['linear'] = (False,) * len(flat_inputs)
+    bind_params['linear'] = _broadcast_tuple(params['linear'], vals)
 
     outs = primitive.bind(*subfuns, *flat_inputs, **bind_params)
     return jax.tree_util.tree_unflatten(out_tree, outs)

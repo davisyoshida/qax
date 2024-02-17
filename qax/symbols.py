@@ -15,7 +15,6 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-
 from .implicit.implicit_array import ArrayValue, ImplicitArray, UninitializedAval, aux_field, use_implicit_args
 from .implicit import implicit_utils as iu
 from .primitives import get_primitive_handler, primitive_handler, default_handler

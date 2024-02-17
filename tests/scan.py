@@ -76,7 +76,48 @@ def test_output_implicit():
 
     a = Wrapper(jnp.arange(6).reshape((3, 2)).astype(jnp.float32))
 
-    expected_output = qax_scan(a.materialize())
-    output = qax_scan(a)
+    expected_output, _ = qax_scan(a.materialize())
+    output, _ = qax_scan(a)
 
-    assert expected_output == output
+    assert isinstance(output, Wrapper)
+    assert expected_output == output.materialize()
+
+def test_scan_closure():
+    a = SymbolicConstant(1, shape=(3, 5), dtype=jnp.float32)
+
+    @qax.use_implicit_args
+    def f(a):
+        def body(carry, x):
+            return carry + jnp.sum(a), None
+
+        return jax.lax.scan(body, 0., jnp.arange(10))
+
+
+    expected = f(a.materialize())
+    output = f(a)
+
+    assert expected == output
+
+def test_scan_closure_nonempty():
+    @dataclass
+    class Stacker(qax.ImplicitArray):
+        a : jax.Array
+        b : jax.Array
+
+        def materialize(self):
+            return jnp.concatenate([self.a, self.b], axis=0)
+
+    w = Stacker(jnp.ones((3, 6)), jnp.ones((3, 6)))
+    w2 = Stacker(jnp.ones((3, 6)), jnp.ones((3, 6)))
+
+    @qax.use_implicit_args
+    def f(w, w2):
+        def body(carry, x):
+            return carry @ w @ w2, x
+
+        return jax.lax.scan(body, jnp.ones(6), jnp.arange(10))[0]
+
+    expected = f(w.materialize(), w2.materialize())
+    output = f(w, w2)
+
+    assert jnp.allclose(expected, output)
