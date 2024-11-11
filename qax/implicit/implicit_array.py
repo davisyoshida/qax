@@ -212,7 +212,7 @@ class ImplicitArray(_ImplicitArrayBase):
             if is_aux:
                 aux_data.append(value)
             else:
-                children.append((name, value))
+                children.append((jax.tree_util.GetAttrKey(name), value))
 
         return children, aux_data
 
