@@ -1,25 +1,34 @@
 from dataclasses import dataclass
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from qax import aux_field, ArrayValue, ImplicitArray, primitive_handler, use_implicit_args, default_handler
+from qax import (
+    ArrayValue,
+    ImplicitArray,
+    aux_field,
+    default_handler,
+    primitive_handler,
+    use_implicit_args,
+)
 
 # To define the behavior we want, we subclass qax.ImplicitArray
 # To define additional fields we also need to mark this class as
 # a dataclass
+
 
 @dataclass
 class ImplicitConst(ImplicitArray):
     # Dataclass attributes may be used to define the arrays which
     # determine the concrete array being represented
     # In this case it's a single JAX scalar
-    value : ArrayValue
+    value: ArrayValue
 
     # ImplicitArrays are pytrees, so all attributes are automatically
     # marked as pytree children. To instead mark one as auxiliary data
     # use the qax.aux_field decorator
-    my_aux_value : str = aux_field(default='some_metadata')
+    my_aux_value: str = aux_field(default="some_metadata")
 
     # There are several ways to control the shape and dtype of an ImplicitArray
     # They are:
@@ -46,6 +55,7 @@ class ImplicitConst(ImplicitArray):
     def materialize(self):
         return jnp.full(self.shape, self.value, dtype=self.dtype)
 
+
 # The way we define custom behavior is by writing a function
 # and decorating it with the primitive_handler decorator
 # The type annotations are used for multiple dispatch with
@@ -53,7 +63,7 @@ class ImplicitConst(ImplicitArray):
 #
 # For commutative ops, the ImplicitArray instance will always be made the
 # lhs, but this isn't true for non-commutative ops as we'll see below
-@primitive_handler('mul')
+@primitive_handler("mul")
 def mul(primitive, a: ImplicitConst, b: jax.Array):
     """
     Arguments:
@@ -65,7 +75,7 @@ def mul(primitive, a: ImplicitConst, b: jax.Array):
     # Get the output shape in case there's any broadcasting going on
     out_shape = jnp.broadcast_shapes(a.shape, b.shape)
     if b.size == 1:
-        # If we get multiplied by a scalar, we can 
+        # If we get multiplied by a scalar, we can
         # output another ImplicitConst instance
         # rather than materializing the dense array
         return ImplicitConst(a.value * b.reshape(1)[0], shape=out_shape)
@@ -74,20 +84,23 @@ def mul(primitive, a: ImplicitConst, b: jax.Array):
     result = b * a.value
     return jnp.broadcast_to(result, out_shape)
 
+
 # We can also define the case where both arguments are ImplicitConsts
-@primitive_handler('mul')
+@primitive_handler("mul")
 def mul(primitive, a: ImplicitConst, b: ImplicitConst):
     out_shape = jnp.broadcast_shapes(a.shape, b.shape)
     return ImplicitConst(a.value * b.value, shape=out_shape)
 
+
 # You can use one handler for multiple primitives by passing an iterable to the decorator
-@primitive_handler(['sin', 'cos', 'exp'])
-def elementwise_unop(primitive, arg : ImplicitConst):
+@primitive_handler(["sin", "cos", "exp"])
+def elementwise_unop(primitive, arg: ImplicitConst):
     # In a lot of cases the logic doesn't have anything
-    # to do with the exact primitive being used so 
+    # to do with the exact primitive being used so
     # we can just use qax.default_handler to execute
     result = default_handler(primitive, arg.value)
     return ImplicitConst(result, shape=arg.shape)
+
 
 # If the primitive has any params (such as reduction axes) the handler will receive
 # them as a param kwarg
@@ -111,36 +124,34 @@ def f(a, b):
     d = jnp.sin(c)
     return jnp.sum(d)
 
+
 def main():
     shape = (5, 7)
 
-    a_full = jnp.full(shape, 3.)
-    a_implicit = ImplicitConst(3., shape=shape)
+    a_full = jnp.full(shape, 3.0)
+    a_implicit = ImplicitConst(3.0, shape=shape)
 
-    b_full = jnp.full(shape, 2.)
-    b_implicit = ImplicitConst(2., shape=shape)
+    b_full = jnp.full(shape, 2.0)
+    b_implicit = ImplicitConst(2.0, shape=shape)
 
     result = f(a_full, b_full)
 
     full_implicit_result = f(a_implicit, b_implicit)
     mixed_result = f(a_implicit, b_full)
 
-
     # We get the same result each time (other than some floating point error)
     # In the second case, we were able to avoid materializing the ImplicitConst
     # so we get an ImplicitConst as an output
-    print(result)               # -9.779543
-    print(full_implicit_result) # ImplicitConst(-9.779541969299316, (5, 7))
-    print(mixed_result)         # -9.779543
+    print(result)  # -9.779543
+    print(full_implicit_result)  # ImplicitConst(-9.779541969299316, (5, 7))
+    print(mixed_result)  # -9.779543
 
     # We can also nest ImplicitArray instances (even if they're different subclasses)
-    nested_b = ImplicitConst(
-        value=ImplicitConst(2., shape=()),
-        shape=shape
-    )
+    nested_b = ImplicitConst(value=ImplicitConst(2.0, shape=()), shape=shape)
 
     nested_result = f(a_implicit, nested_b)
-    print(nested_result) # ImplicitConst(ImplicitConst(-9.779541969299316, ()), (5, 7))
+    print(nested_result)  # ImplicitConst(ImplicitConst(-9.779541969299316, ()), (5, 7))
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

@@ -1,3 +1,4 @@
+import warnings
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -5,27 +6,26 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from functools import partial, wraps
 from itertools import chain
 from typing import ClassVar, Optional
-import warnings
 
 import jax
-from jax.api_util import flatten_fun, flatten_fun_nokwargs
-from jax import core
 import jax.extend.linear_util as lu
 import jax.interpreters.partial_eval as pe
-from jax.tree_util import register_pytree_with_keys_class
 import jax.numpy as jnp
-
+from jax import core
 from jax._src.typing import DTypeLike, Shape
+from jax.api_util import flatten_fun, flatten_fun_nokwargs
+from jax.tree_util import register_pytree_with_keys_class
 
 from .. import constants
 from ..primitives import ArrayValue, get_primitive_handler
-
 from . import implicit_utils as iu
 
+
 def _with_implicit_flat(fun: lu.WrappedFun) -> lu.WrappedFun:
-  # Splitting to avoid leaks based on https://github.com/google/jax/blob/0dffdf4645db7bf7a9fadd4bcfe9ec0368a8ecb9/jax/_src/interpreters/batching.py#L539
+    # Splitting to avoid leaks based on https://github.com/google/jax/blob/0dffdf4645db7bf7a9fadd4bcfe9ec0368a8ecb9/jax/_src/interpreters/batching.py#L539
     f = _implicit_inner(fun)
     return _implicit_outer(f)
+
 
 @lu.transformation
 def _implicit_outer(*in_vals):
@@ -33,6 +33,7 @@ def _implicit_outer(*in_vals):
         outs = yield (main, *in_vals), {}
         del main
     yield outs
+
 
 @lu.transformation
 def _implicit_inner(main, *in_vals):
@@ -45,12 +46,14 @@ def _implicit_inner(main, *in_vals):
     out_vals = [trace.full_raise(t).value for t in outs]
     yield out_vals
 
+
 def use_implicit_args(f):
     """
     Decorator which allows a function to accept arguments which subclass ImplicitArray, possibly
     including further ImplicitArray instances as children.
     Any number of arguments (including 0) may be ImplicitArrays.
     """
+
     @wraps(f)
     def implicit_f(*args, **kwargs):
         flat_args, in_tree = iu.tree_flatten_with_implicit((args, kwargs))
@@ -61,21 +64,24 @@ def use_implicit_args(f):
 
     return implicit_f
 
+
 def aux_field(metadata=None, **kwargs):
     metadata = dict(metadata) if metadata else {}
-    metadata['implicit_array_aux'] = True
+    metadata["implicit_array_aux"] = True
     return field(metadata=metadata, **kwargs)
+
 
 class UninitializedAval(Exception):
     def __init__(self, kind):
         super().__init__(_AVAL_ERROR_MESSAGE.format(kind))
+
 
 # This descriptor and the below context manager support discovering the aval
 # of an ImplicitArray. We don't want to throw an error just because a shape
 # wasn't passed, since it may be possible to infer it via materialization
 class _AvalDescriptor:
     def __set_name__(self, owner, name):
-        self._name = f'_{name}'
+        self._name = f"_{name}"
 
     def __get__(self, obj, owner=None):
         if obj is None:
@@ -88,9 +94,12 @@ class _AvalDescriptor:
     def __set__(self, obj, value):
         setattr(obj, self._name, value)
 
+
 # Context manager used for disabling UninitializedAval errors
 # during tree flattening only
-_aval_discovery = ContextVar('aval_discovery', default=False)
+_aval_discovery = ContextVar("aval_discovery", default=False)
+
+
 @contextmanager
 def _aval_discovery_context():
     token = _aval_discovery.set(True)
@@ -99,15 +108,17 @@ def _aval_discovery_context():
     finally:
         _aval_discovery.reset(token)
 
-@dataclass
-class _ImplicitArrayBase(ArrayValue,ABC):
-    commute_ops : ClassVar[bool] = True
-    warn_on_materialize : ClassVar[bool] = True
-    default_shape : ClassVar[Optional[Shape]] = None
-    default_dtype : ClassVar[Optional[DTypeLike]] = None
 
-    shape : Optional[Shape] = aux_field(kw_only=True, default=None)
-    dtype : DTypeLike = aux_field(kw_only=True, default=None)
+@dataclass
+class _ImplicitArrayBase(ArrayValue, ABC):
+    commute_ops: ClassVar[bool] = True
+    warn_on_materialize: ClassVar[bool] = True
+    default_shape: ClassVar[Optional[Shape]] = None
+    default_dtype: ClassVar[Optional[DTypeLike]] = None
+
+    shape: Optional[Shape] = aux_field(kw_only=True, default=None)
+    dtype: DTypeLike = aux_field(kw_only=True, default=None)
+
 
 @dataclass
 class ImplicitArray(_ImplicitArrayBase):
@@ -149,9 +160,11 @@ class ImplicitArray(_ImplicitArrayBase):
             if shape is None:
                 self.shape = aval.shape
             elif shape != aval.shape:
-                warnings.warn(f'ImplicitArray shape {shape} does not match materialization shape {aval.shape}')
+                warnings.warn(
+                    f"ImplicitArray shape {shape} does not match materialization shape {aval.shape}"
+                )
         elif shape is None:
-            raise UninitializedAval('shape')
+            raise UninitializedAval("shape")
 
         dtype = None
         try:
@@ -167,9 +180,11 @@ class ImplicitArray(_ImplicitArrayBase):
             if dtype is None:
                 self.dtype = aval.dtype
             elif dtype != aval.dtype:
-                warnings.warn(f'ImplicitArray dtype {dtype} does not match materialization dtype {aval.dtype}')
+                warnings.warn(
+                    f"ImplicitArray dtype {dtype} does not match materialization dtype {aval.dtype}"
+                )
         elif dtype is None:
-            raise UninitializedAval('dtype')
+            raise UninitializedAval("dtype")
 
     def compute_shape(self):
         """
@@ -234,7 +249,7 @@ class ImplicitArray(_ImplicitArrayBase):
         if len(args) == 2 and self.commute_ops:
             args, use_params = _maybe_swap_args(primitive.name, args, use_params)
 
-        #maybe_kwargs = {'params': params} if params else {}
+        # maybe_kwargs = {'params': params} if params else {}
         flat_args, in_tree = iu.flatten_one_implicit_layer((args, params))
         flat_handler, out_tree = flatten_fun(handler, in_tree)
 
@@ -247,17 +262,23 @@ class ImplicitArray(_ImplicitArrayBase):
         cls.warn_on_materialize = warn_on_materialize
 
         if not is_dataclass(cls):
-            raise TypeError(f'{cls.__name__} must be a dataclass')
+            raise TypeError(f"{cls.__name__} must be a dataclass")
         core.pytype_aval_mappings[cls] = lambda x: x.aval
         register_pytree_with_keys_class(cls)
         return cls
 
+
 def _get_names_and_aux(obj):
     for val in fields(obj):
-        yield val.name, bool(val.metadata.get('implicit_array_aux'))
+        yield val.name, bool(val.metadata.get("implicit_array_aux"))
+
 
 def _materialize_all(it):
-    return [iu.materialize_nested(val) if isinstance(val, ImplicitArray) else val for val in it]
+    return [
+        iu.materialize_nested(val) if isinstance(val, ImplicitArray) else val
+        for val in it
+    ]
+
 
 def _maybe_swap_args(op_name, args, params):
     if isinstance(args[0], ImplicitArray):
@@ -266,6 +287,7 @@ def _maybe_swap_args(op_name, args, params):
         return args[::-1], params
 
     return args, params
+
 
 class ImplicitArrayTracer(core.Tracer):
     def __init__(self, trace, value):
@@ -284,26 +306,38 @@ class ImplicitArrayTracer(core.Tracer):
 
         return core.full_lower(self.value)
 
+
 class ImplicitArrayTrace(core.Trace):
     pure = lift = lambda self, val: ImplicitArrayTracer(self, val)
 
     def process_primitive(self, primitive, tracers, params):
         outs = NotImplemented
         vals = [t.value for t in tracers]
-        implicit_idx = next(i for i, v in enumerate(vals) if isinstance(v, ImplicitArray))
+        implicit_idx = next(
+            (i for i, v in enumerate(vals) if isinstance(v, ImplicitArray)), None
+        )
 
-        # First try to handle the primitive using custom handlers
+        if implicit_idx is None:
+            # No tracers, so just do default evaluation:
+            subfuns, bind_params = primitive.get_bind_params(params)
+            result = primitive.bind(*subfuns, *vals, **bind_params)
+            return result
+
         outs = vals[implicit_idx].handle_primitive(primitive, *vals, params=params)
 
         if outs is NotImplemented:
             # For higher order primitives most users won't implement custom
             # logic, so there shouldn't be a warning
             if primitive.name in _default_handlers:
-                outs = _default_handlers[primitive.name](primitive, *vals, params=params)
+                outs = _default_handlers[primitive.name](
+                    primitive, *vals, params=params
+                )
             else:
                 implicit_cls = vals[implicit_idx].__class__
                 if implicit_cls.warn_on_materialize:
-                    warnings.warn(f'Primitive {primitive.name} was not handled by class {implicit_cls.__name__}, so implicit args will be materialized.')
+                    warnings.warn(
+                        f"Primitive {primitive.name} was not handled by class {implicit_cls.__name__}, so implicit args will be materialized."
+                    )
 
         if outs is NotImplemented:
             outs = vals[implicit_idx].default_handler(primitive, *vals, params=params)
@@ -311,6 +345,7 @@ class ImplicitArrayTrace(core.Trace):
         if primitive.multiple_results:
             return [ImplicitArrayTracer(self, out) for out in outs]
         return ImplicitArrayTracer(self, outs)
+
 
 def wrap_jaxpr(jaxpr, vals_with_implicits, return_closed=True):
     if isinstance(jaxpr, jax.core.ClosedJaxpr):
@@ -323,14 +358,23 @@ def wrap_jaxpr(jaxpr, vals_with_implicits, return_closed=True):
     flat_args, in_tree = jax.tree_util.tree_flatten((literals, *vals_with_implicits))
     flat_fn, out_tree = flatten_fun_nokwargs(wrapped_fn, in_tree)
 
-    new_jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(flat_fn, [core.get_aval(v) for v in flat_args])
+    new_jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(
+        flat_fn, [core.get_aval(v) for v in flat_args]
+    )
 
-    ret = (jax.core.ClosedJaxpr(new_jaxpr, consts),) if return_closed else (new_jaxpr, consts)
+    ret = (
+        (jax.core.ClosedJaxpr(new_jaxpr, consts),)
+        if return_closed
+        else (new_jaxpr, consts)
+    )
     return *ret, flat_args, out_tree()
+
 
 def _transform_jaxpr_output(jaxpr, jaxpr_args, orig_out_struct, out_transform):
     def eval_fn(literals, *args):
-        output = use_implicit_args(partial(core.eval_jaxpr, jaxpr.jaxpr))(literals, *args)
+        output = use_implicit_args(partial(core.eval_jaxpr, jaxpr.jaxpr))(
+            literals, *args
+        )
         unflattened_output = orig_out_struct.unflatten(output)
         return out_transform(unflattened_output)
 
@@ -338,9 +382,12 @@ def _transform_jaxpr_output(jaxpr, jaxpr_args, orig_out_struct, out_transform):
 
     flat_args, in_tree = jax.tree_util.tree_flatten((jaxpr.literals, *jaxpr_args))
     flat_fn, out_tree = flatten_fun_nokwargs(wrapped, in_tree)
-    new_jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(flat_fn, [core.get_aval(v) for v in flat_args])
+    new_jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(
+        flat_fn, [core.get_aval(v) for v in flat_args]
+    )
 
     return jax.core.ClosedJaxpr(new_jaxpr, consts), out_tree()
+
 
 def _match_branches(branches, arg_vals):
     out_avals = []
@@ -353,7 +400,9 @@ def _match_branches(branches, arg_vals):
         out_avals.append(
             branch_out_struct.unflatten(
                 jax.eval_shape(
-                    partial(core.eval_jaxpr, new_jaxpr.jaxpr), new_jaxpr.literals, *flat_inputs
+                    partial(core.eval_jaxpr, new_jaxpr.jaxpr),
+                    new_jaxpr.literals,
+                    *flat_inputs,
                 )
             )
         )
@@ -362,100 +411,105 @@ def _match_branches(branches, arg_vals):
     new_branches = []
     out_struct = None
     for (new_jaxpr, orig_out_struct), transform in zip(new_jaxprs, out_transforms):
-        new_jaxpr, out_struct = _transform_jaxpr_output(new_jaxpr, flat_inputs, orig_out_struct, transform)
+        new_jaxpr, out_struct = _transform_jaxpr_output(
+            new_jaxpr, flat_inputs, orig_out_struct, transform
+        )
         new_branches.append(new_jaxpr)
 
     return tuple(new_branches), out_struct, flat_inputs
+
 
 def _handle_cond(primitive, *vals, params):
     cond_val, *arg_vals = vals
     subfuns, bind_params = primitive.get_bind_params(params)
 
-    new_branches, out_struct, flat_inputs = _match_branches(params['branches'], arg_vals)
-    bind_params['branches'] = new_branches
-    bind_params['linear'] = _broadcast_tuple(bind_params['linear'], arg_vals)
+    new_branches, out_struct, flat_inputs = _match_branches(
+        params["branches"], arg_vals
+    )
+    bind_params["branches"] = new_branches
+    bind_params["linear"] = _broadcast_tuple(bind_params["linear"], arg_vals)
 
     outs = primitive.bind(*subfuns, cond_val, *flat_inputs, **bind_params)
     return jax.tree_util.tree_unflatten(out_struct, outs)
 
+
 def _handle_remat2(primitive, *vals, params):
     subfuns, bind_params = primitive.get_bind_params(params)
-    new_jaxpr, consts, flat_inputs, out_tree = wrap_jaxpr(bind_params['jaxpr'], vals, return_closed=False)
+    new_jaxpr, consts, flat_inputs, out_tree = wrap_jaxpr(
+        bind_params["jaxpr"], vals, return_closed=False
+    )
     new_jaxpr = pe.convert_constvars_jaxpr(new_jaxpr)
-    bind_params['jaxpr'] = new_jaxpr
+    bind_params["jaxpr"] = new_jaxpr
     outs = primitive.bind(*subfuns, *consts, *flat_inputs, **bind_params)
     return jax.tree_util.tree_unflatten(out_tree, outs)
 
 
 def _handle_pjit(primitive, *vals, params):
-    new_jaxpr, flat_inputs, out_tree = wrap_jaxpr(params['jaxpr'], vals)
-    donated_invars = _broadcast_tuple(params['donated_invars'], vals)
-    in_shardings = _broadcast_tuple(params['in_shardings'], vals)
-    out_shardings = _broadcast_tuple(params['out_shardings'], out_tree)
+    new_jaxpr, flat_inputs, out_tree = wrap_jaxpr(params["jaxpr"], vals)
+    donated_invars = _broadcast_tuple(params["donated_invars"], vals)
+    in_shardings = _broadcast_tuple(params["in_shardings"], vals)
+    out_shardings = _broadcast_tuple(params["out_shardings"], out_tree)
 
     subfuns, bind_params = primitive.get_bind_params(params)
-    bind_params['jaxpr'] = new_jaxpr
-    bind_params['donated_invars'] = donated_invars
-    bind_params['in_shardings'] = in_shardings
-    bind_params['out_shardings'] = out_shardings
+    bind_params["jaxpr"] = new_jaxpr
+    bind_params["donated_invars"] = donated_invars
+    bind_params["in_shardings"] = in_shardings
+    bind_params["out_shardings"] = out_shardings
     outs = primitive.bind(*subfuns, *flat_inputs, **bind_params)
     return jax.tree_util.tree_unflatten(out_tree, outs)
 
+
 def _handle_scan(primitive, *vals, params):
-    n_consts = params['num_consts']
-    n_carry = params['num_carry']
+    n_consts = params["num_consts"]
+    n_carry = params["num_carry"]
 
     consts = vals[:n_consts]
     real_n_consts = len(jax.tree_util.tree_leaves(consts))
 
-    carries = vals[n_consts:n_consts + n_carry]
-    xs = vals[n_consts + n_carry:]
+    carries = vals[n_consts : n_consts + n_carry]
+    xs = vals[n_consts + n_carry :]
 
     if any(isinstance(c, ImplicitArray) for c in carries):
         warnings.warn(
-            'ImplicitArray in scan carries are not yet supported.'
-            ' If you need this feature please open an issue on the Qax repo:'
-            ' https://github.com/davisyoshida/qax/issues'
+            "ImplicitArray in scan carries are not yet supported."
+            " If you need this feature please open an issue on the Qax repo:"
+            " https://github.com/davisyoshida/qax/issues"
         )
         carries = _materialize_all(carries)
 
-    sliced_xs = jax.tree_map(
-            partial(jax.eval_shape, lambda x: x[0]),
-            xs
-    )
+    sliced_xs = jax.tree_map(partial(jax.eval_shape, lambda x: x[0]), xs)
 
     for x in sliced_xs:
         if isinstance(x, ImplicitArray):
-            assert len(x._shape) > 0, 'Attempted to scan over a scalar.'
+            assert len(x._shape) > 0, "Attempted to scan over a scalar."
             x._shape = x._shape[1:]
 
-
-    jaxpr = params['jaxpr']
+    jaxpr = params["jaxpr"]
     new_jaxpr, _, out_tree = wrap_jaxpr(
         jaxpr=jaxpr,
         vals_with_implicits=(*consts, *carries, *sliced_xs),
-        return_closed=True
+        return_closed=True,
     )
 
-    flat_inputs = jax.tree_util.tree_leaves(
-        (jaxpr.literals, *consts, *carries, *xs)
-    )
+    flat_inputs = jax.tree_util.tree_leaves((jaxpr.literals, *consts, *carries, *xs))
 
     subfuns, bind_params = primitive.get_bind_params(params)
-    bind_params['jaxpr'] = new_jaxpr
-    bind_params['num_consts'] = real_n_consts
-    bind_params['num_carry'] = len(carries)
-    bind_params['linear'] = _broadcast_tuple(params['linear'], vals)
+    bind_params["jaxpr"] = new_jaxpr
+    bind_params["num_consts"] = real_n_consts
+    bind_params["num_carry"] = len(carries)
+    bind_params["linear"] = _broadcast_tuple(params["linear"], vals)
 
     outs = primitive.bind(*subfuns, *flat_inputs, **bind_params)
     return jax.tree_util.tree_unflatten(out_tree, outs)
 
+
 _default_handlers = {
-    'cond': _handle_cond,
-    'remat2': _handle_remat2,
-    'pjit': _handle_pjit,
-    'scan': _handle_scan,
+    "cond": _handle_cond,
+    "remat2": _handle_remat2,
+    "pjit": _handle_pjit,
+    "scan": _handle_scan,
 }
+
 
 def materialize_handler(primitive, *vals, params):
     vals = _materialize_all(vals)
@@ -463,35 +517,38 @@ def materialize_handler(primitive, *vals, params):
     result = use_implicit_args(primitive.bind)(*subfuns, *vals, **bind_params)
     return result
 
+
 def _broadcast_tuple(t, trees):
     if isinstance(trees, jax.tree_util.PyTreeDef):
         trees = jax.tree_util.tree_unflatten(trees, range(trees.num_leaves))
     assert len(t) == len(trees)
-    return tuple(chain.from_iterable(
-        (tuple_val for _ in jax.tree_util.tree_leaves(tree))
-        for tuple_val, tree in zip(t, trees)
-    ))
+    return tuple(
+        chain.from_iterable(
+            (tuple_val for _ in jax.tree_util.tree_leaves(tree))
+            for tuple_val, tree in zip(t, trees)
+        )
+    )
+
 
 def _get_materialization_aval(imp_arr):
     with _aval_discovery_context(), _filter_materialization_warnings():
-        result = jax.eval_shape(
-            partial(iu.materialize_nested, full=True),
-            imp_arr
-        )
+        result = jax.eval_shape(partial(iu.materialize_nested, full=True), imp_arr)
     return result
+
 
 @contextmanager
 def _filter_materialization_warnings():
     with warnings.catch_warnings():
-        warnings.filterwarnings('ignore', message='Primitive.*was not handled')
+        warnings.filterwarnings("ignore", message="Primitive.*was not handled")
         yield
 
+
 _AVAL_ERROR_MESSAGE = (
-    '{} was not set during initialization. Shape and dtype may be set by:'
-    '\n\t1. Directly passing them as keyword arguments to ImplicitArray instances'
-    '\n\t2. Overriding the default_shape/default_dtype class attributes'
-    '\n\t3. Overriding the compute_shape/compute_dtype methods'
-    '\n\t4. Overriding __post_init__ and setting their values there'
-    '\n\t5. None of the above, in which case `materialize()` will be called in an attempt to infer them.'
-    ' If their values are required in order to compute the materialization this will be unsuccessful.'
+    "{} was not set during initialization. Shape and dtype may be set by:"
+    "\n\t1. Directly passing them as keyword arguments to ImplicitArray instances"
+    "\n\t2. Overriding the default_shape/default_dtype class attributes"
+    "\n\t3. Overriding the compute_shape/compute_dtype methods"
+    "\n\t4. Overriding __post_init__ and setting their values there"
+    "\n\t5. None of the above, in which case `materialize()` will be called in an attempt to infer them."
+    " If their values are required in order to compute the materialization this will be unsuccessful."
 )

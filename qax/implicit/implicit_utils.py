@@ -2,27 +2,28 @@ from functools import partial, wraps
 from itertools import chain
 
 import jax
-from jax.api_util import flatten_fun_nokwargs
-from jax import core
 import jax.extend.linear_util as lu
-from jax import tree_util
+from jax import core, tree_util
+from jax.api_util import flatten_fun_nokwargs
 
 from . import implicit_array as ia
 
+
 class _EmptyNodeCls:
     _instance = None
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
+
 EmptyNode = _EmptyNodeCls()
 
 tree_util.register_pytree_node(
-    _EmptyNodeCls,
-    lambda node: ((), None),
-    lambda _, __: EmptyNode
+    _EmptyNodeCls, lambda node: ((), None), lambda _, __: EmptyNode
 )
+
 
 def combine_leaf_predicate(base_fn, is_leaf):
     @wraps(base_fn)
@@ -30,38 +31,62 @@ def combine_leaf_predicate(base_fn, is_leaf):
         if new_is_leaf is None:
             combined_is_leaf = is_leaf
         else:
+
             def combined_is_leaf(arg):
                 return is_leaf(arg) or new_is_leaf(arg)
+
         return base_fn(*args, is_leaf=combined_is_leaf)
+
     return new_fn
+
 
 def leaf_predicate(x):
     return isinstance(x, (ia.ImplicitArray, _EmptyNodeCls))
 
+
 tree_map_with_implicit = combine_leaf_predicate(jax.tree_map, leaf_predicate)
-tree_map_with_path_with_implicit = combine_leaf_predicate(tree_util.tree_map_with_path, leaf_predicate)
-tree_flatten_with_implicit = combine_leaf_predicate(tree_util.tree_flatten, leaf_predicate)
-tree_flatten_with_path_with_implicit = combine_leaf_predicate(tree_util.tree_flatten_with_path, leaf_predicate)
-tree_leaves_with_implicit = combine_leaf_predicate(tree_util.tree_leaves, leaf_predicate)
-tree_structure_with_implicit = combine_leaf_predicate(tree_util.tree_structure, leaf_predicate)
+tree_map_with_path_with_implicit = combine_leaf_predicate(
+    tree_util.tree_map_with_path, leaf_predicate
+)
+tree_flatten_with_implicit = combine_leaf_predicate(
+    tree_util.tree_flatten, leaf_predicate
+)
+tree_flatten_with_path_with_implicit = combine_leaf_predicate(
+    tree_util.tree_flatten_with_path, leaf_predicate
+)
+tree_leaves_with_implicit = combine_leaf_predicate(
+    tree_util.tree_leaves, leaf_predicate
+)
+tree_structure_with_implicit = combine_leaf_predicate(
+    tree_util.tree_structure, leaf_predicate
+)
+
 
 def flatten_one_implicit_layer(tree):
     def is_leaf_below_node(node, x):
         return isinstance(x, ia.ImplicitArray) and x is not node
 
     def replace_subtree_implicits(node):
-        return tree_util.tree_map(lambda _: 1, node, is_leaf=partial(is_leaf_below_node, node))
+        return tree_util.tree_map(
+            lambda _: 1, node, is_leaf=partial(is_leaf_below_node, node)
+        )
 
     prototype = tree_map_with_implicit(replace_subtree_implicits, tree)
     struct = tree_util.tree_structure(prototype)
 
     leaves = tree_leaves_with_implicit(tree)
-    leaves = list(chain.from_iterable(
-        tree_util.tree_leaves(leaf, is_leaf=partial(is_leaf_below_node, leaf))
-        if isinstance(leaf, ia.ImplicitArray) else
-        [leaf] for leaf in leaves
-    ))
+    leaves = list(
+        chain.from_iterable(
+            (
+                tree_util.tree_leaves(leaf, is_leaf=partial(is_leaf_below_node, leaf))
+                if isinstance(leaf, ia.ImplicitArray)
+                else [leaf]
+            )
+            for leaf in leaves
+        )
+    )
     return leaves, struct
+
 
 def implicit_depth(tree):
     leaves = tree_leaves_with_implicit(tree)
@@ -81,6 +106,7 @@ def implicit_depth(tree):
         depth += 1
         leaves = next_leaves
 
+
 def _map_leaves_with_implicit_path(f, leaves, is_leaf, path_prefix=()):
     mapped_leaves = []
     for idx, leaf in enumerate(leaves):
@@ -91,27 +117,29 @@ def _map_leaves_with_implicit_path(f, leaves, is_leaf, path_prefix=()):
 
         subtree, substruct = flatten_one_implicit_layer(leaf)
         mapped_subtree = _map_leaves_with_implicit_path(
-            f,
-            subtree,
-            is_leaf=is_leaf,
-            path_prefix=path
+            f, subtree, is_leaf=is_leaf, path_prefix=path
         )
         mapped_leaves.append(tree_util.tree_unflatten(substruct, mapped_subtree))
     return mapped_leaves
 
+
 def _get_pruning_transform(tree, materialization_paths):
     if not materialization_paths:
         return lambda x: x
+
     def is_leaf(path, leaf):
         return path in materialization_paths
 
     def materialize_subtrees(tree):
         leaves, struct = tree_flatten_with_implicit(tree)
 
-        mapped_leaves =  _map_leaves_with_implicit_path(partial(materialize_nested, full=True), leaves, is_leaf)
+        mapped_leaves = _map_leaves_with_implicit_path(
+            partial(materialize_nested, full=True), leaves, is_leaf
+        )
         return tree_util.tree_unflatten(struct, mapped_leaves)
 
     return materialize_subtrees
+
 
 def get_common_prefix_transforms(trees):
     """
@@ -127,13 +155,17 @@ def get_common_prefix_transforms(trees):
     post_materialization_avals = [core.get_aval(leaf) for leaf in all_leaves[0]]
     for i, (leaves, structure) in enumerate(zip(all_leaves[1:], structures[1:]), 1):
         if structure != structures[0]:
-            raise ValueError('Trees do not have the same structure after materialization')
+            raise ValueError(
+                "Trees do not have the same structure after materialization"
+            )
 
         for leaf, expected_aval in zip(leaves, post_materialization_avals):
             aval = core.get_aval(leaf)
-            if not (aval.shape == expected_aval.shape and aval.dtype == expected_aval.dtype):
+            if not (
+                aval.shape == expected_aval.shape and aval.dtype == expected_aval.dtype
+            ):
                 raise ValueError(
-                    f'Trees do not have the same avals after materialization. Tree 0: {expected_aval}, Tree {i}: {aval}'
+                    f"Trees do not have the same avals after materialization. Tree 0: {expected_aval}, Tree {i}: {aval}"
                 )
 
     # Stack will contain tuples of (path, nodes)
@@ -154,11 +186,11 @@ def get_common_prefix_transforms(trees):
     while stack:
         path_prefix, nodes = stack.pop()
         if not any(isinstance(node, ia.ImplicitArray) for node in nodes):
-               continue
+            continue
 
-        all_leaves, all_structures = zip(*(
-            flatten_one_implicit_layer(node) for node in nodes
-        ))
+        all_leaves, all_structures = zip(
+            *(flatten_one_implicit_layer(node) for node in nodes)
+        )
         node_structures = set(all_structures)
         if len(node_structures) > 1:
             materialization_paths.add(path_prefix)
@@ -185,6 +217,7 @@ def get_common_prefix_transforms(trees):
 
     return [_get_pruning_transform(tree, materialization_paths) for tree in trees]
 
+
 def materialize_nested(implicit_arr, full=False):
     """
     Materialize an ImplicitArray instance, handling the case where implicit_arr.materialize()
@@ -206,4 +239,3 @@ def materialize_nested(implicit_arr, full=False):
             break
 
     return implicit_arr
-

@@ -1,21 +1,24 @@
 from dataclasses import dataclass
+
 import jax
 import jax.numpy as jnp
 
-from qax import ArrayValue, use_implicit_args, ImplicitArray, primitive_handler
+from qax import ArrayValue, ImplicitArray, primitive_handler, use_implicit_args
 
 
 @dataclass
 class TwoMatricesInATrenchcoat(ImplicitArray):
-    a : ArrayValue
-    b : ArrayValue
+    a: ArrayValue
+    b: ArrayValue
 
     def materialize(self):
         return self.a + self.b
 
-@primitive_handler('mul')
-def handler(primitive, x : TwoMatricesInATrenchcoat, y : jax.Array):
+
+@primitive_handler("mul")
+def handler(primitive, x: TwoMatricesInATrenchcoat, y: jax.Array):
     return TwoMatricesInATrenchcoat(x.a * y, x.b * y)
+
 
 def test_grad():
     shape = (5, 7)
@@ -43,4 +46,3 @@ def test_grad():
     assert jnp.allclose(x_grad.a, a_grad_expected)
     assert jnp.allclose(x_grad.b, b_grad_expected)
     assert jnp.allclose(y_grad, y_grad_expected)
-
